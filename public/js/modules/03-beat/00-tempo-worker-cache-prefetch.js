@@ -384,6 +384,7 @@ async function fetchBeatPrefetchAudioUrl(song) {
     if (!resolved || !resolved.url || resolved.trial) return null;
     return '/api/audio?url=' + encodeURIComponent(resolved.url);
   }
+  if (songProviderKey(song) === 'qmkg') return null;
   var isQQ = songProviderKey(song) === 'qq';
   var requestedQuality = normalizePlaybackQualityForProvider(getPlaybackQualityForSong(song), isQQ ? 'qq' : 'netease');
   if (!isQQ && requestedQuality === 'jymaster' && !hasProviderSvip('netease', loginStatus)) requestedQuality = 'hires';

@@ -16,6 +16,7 @@ function lyricTranslationTextFromAliases(source) {
 function lyricEndpointForSong(songOrId) {
   var song = (songOrId && typeof songOrId === 'object') ? songOrId : null;
   var provider = song ? songProviderKey(song) : 'netease';
+  if (provider === 'qmkg') return '/api/qmkg/lyric?id=' + encodeURIComponent(song.ksongMid || song.id || '');
   if (provider === 'qq') {
     var mid = song.mid || song.songmid || song.id || '';
     var qqId = song.qqId || (/^\d+$/.test(String(song.id || '')) ? song.id : '');
@@ -156,7 +157,7 @@ function lyricTranslationFallbackKey(song) {
 function shouldFetchNeteaseLyricTranslationFallback(song, state) {
   if (!song || !state || !state.usableLyric) return false;
   if (song.type === 'local' || song.source === 'local' || song.localUrl || song.type === 'podcast') return false;
-  if (songProviderKey(song) === 'netease') return false;
+  if (songProviderKey(song) === 'netease' || songProviderKey(song) === 'qmkg') return false;
   if (state.translationLines && state.translationLines.length) return false;
   if (!String(song.name || song.title || '').trim()) return false;
   var key = lyricTranslationFallbackKey(song);

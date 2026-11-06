@@ -115,9 +115,25 @@
           <button id="search-mode-qq" type="button" onclick="setSearchMode('qq')" aria-selected="false">QQ</button>
           <button id="search-mode-kugou" type="button" onclick="setSearchMode('kugou')" aria-selected="false">KG</button>
           <button id="search-mode-qishui" type="button" onclick="setSearchMode('qishui')" aria-selected="false">QS</button>
+          <button id="search-mode-qmkg" type="button" onclick="setSearchMode('qmkg')" aria-selected="false" title="全民 K 歌纯伴奏">K歌伴奏</button>
           <button id="search-mode-podcast" type="button" onclick="setSearchMode('podcast')"
             aria-selected="false">Podcast</button>
         </div>
+        <section id="qmkg-connection" class="qmkg-connection" aria-label="全民 K 歌连接" hidden>
+          <div class="qmkg-connection-head">
+            <span id="qmkg-connection-status" role="status" aria-live="polite">尚未检测连接</span>
+            <button id="qmkg-refresh-btn" type="button" onclick="refreshQmkgConnection()">重新检测</button>
+          </div>
+          <p id="qmkg-connection-message">搜索无需登录。播放伴奏前，请在 Windows 全民 K 歌客户端登录，然后点击重新检测。</p>
+          <details>
+            <summary>客户端缓存目录（可选）</summary>
+            <label for="qmkg-cache-dir">WeSingCache 目录，留空自动查找</label>
+            <div class="qmkg-cache-config">
+              <input id="qmkg-cache-dir" type="text" placeholder="例如 D:\WeSingCache" spellcheck="false" autocomplete="off" oninput="this.dataset.edited='true'">
+              <button id="qmkg-save-btn" type="button" onclick="saveQmkgCacheDirectory()">保存并检测</button>
+            </div>
+          </details>
+        </section>
         <div id="search-results"></div>
       </div>
       <div id="upload-actions">

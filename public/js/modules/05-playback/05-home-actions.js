@@ -1,6 +1,6 @@
 function songFromListenRecord(record) {
   if (!record) return null;
-  var provider = record.sourceKey || '';
+  var provider = record.sourceKey || record.provider || '';
   if (!provider && record.type === 'qq') provider = 'qq';
   if (!provider) provider = record.mid ? 'qq' : 'netease';
   return {
@@ -8,6 +8,10 @@ function songFromListenRecord(record) {
     source: provider,
     type: record.type || (provider === 'qq' ? 'qq' : 'song'),
     id: record.id || record.mid || record.key || '',
+    ksongMid: record.ksongMid || (provider === 'qmkg' ? record.id : '') || '',
+    accompaniment: provider === 'qmkg' || record.accompaniment === true,
+    playbackMode: provider === 'qmkg' ? 'accompaniment' : (record.playbackMode || ''),
+    duration: record.duration || 0,
     mid: record.mid || '',
     songmid: record.mid || '',
     mediaMid: record.mediaMid || '',

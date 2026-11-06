@@ -606,6 +606,9 @@ async function retryNeteaseSourceMatchPlayback(song, data, idx, token, opts, req
 async function resolveAlbumGaplessPlaybackData(song) {
   if (!song || song.type === 'local' || song.source === 'local' || song.localUrl) return null;
   var playbackProvider = normalizePlaybackProvider(songProviderKey(song));
+  if (playbackProvider === 'qmkg') {
+    return requireQmkgAccompanimentPlaybackData(await apiJson('/api/qmkg/song/url?id=' + encodeURIComponent(song.ksongMid || song.id || ''), { timeoutMs: 15000 }));
+  }
   var requestedQuality = normalizePlaybackQualityForProvider(getProviderPlaybackQuality(playbackProvider), playbackProvider);
   if (playbackProvider === 'netease' && requestedQuality === 'jymaster' && !hasProviderSvip('netease', loginStatus)) requestedQuality = 'hires';
   var runtimeQualityCap = playbackQualityCapValue(song, playbackProvider);
@@ -1160,6 +1163,7 @@ async function playQueueAt(idx, opts) {
       var isKugouPlayback = playbackProvider === 'kugou';
       var isQishuiPlayback = playbackProvider === 'qishui';
       var isSpotifyPlayback = playbackProvider === 'spotify';
+      var isQmkgPlayback = playbackProvider === 'qmkg';
       var requestedQuality = normalizePlaybackQualityForProvider(opts.qualityOverride || getProviderPlaybackQuality(playbackProvider), playbackProvider);
       if (playbackProvider === 'netease' && requestedQuality === 'jymaster' && !hasProviderSvip('netease', loginStatus)) requestedQuality = 'hires';
       var runtimeQualityCap = playbackQualityCapValue(song, playbackProvider);
@@ -1172,6 +1176,8 @@ async function playQueueAt(idx, opts) {
         data = opts.preloadedData;
       } else if (opts.preResolvedPlaybackData && opts.preResolvedPlaybackData.url) {
         data = opts.preResolvedPlaybackData;
+      } else if (isQmkgPlayback) {
+        data = await apiJson('/api/qmkg/song/url?id=' + encodeURIComponent(song.ksongMid || song.id || ''), { timeoutMs: 15000 });
       } else if (isQQPlayback) {
         data = await apiJson('/api/qq/song/url?mid=' + encodeURIComponent(song.mid || song.songmid || song.id || '') + '&mediaMid=' + encodeURIComponent(song.mediaMid || song.media_mid || '') + qqPlaybackEvidenceQuery(song) + qualityParam, { timeoutMs: 15000 });
       } else if (isKugouPlayback) {
@@ -1197,6 +1203,7 @@ async function playQueueAt(idx, opts) {
         data = await apiJson('/api/song/url?id=' + encodeURIComponent(song.id || '') + neteasePlaybackMatchQuery(song) + qualityParam, { timeoutMs: 14000 });
       }
       if (token !== trackSwitchToken) return;
+      if (isQmkgPlayback) data = requireQmkgAccompanimentPlaybackData(data);
       if (
         typeof sourceFallbackRecoveryFromOptions === 'function'
         && sourceFallbackRecoveryFromOptions(opts)
@@ -1426,7 +1433,7 @@ async function playQueueAt(idx, opts) {
         var mediaFailureRecovery = typeof sourceFallbackRecoveryFromOptions === 'function'
           ? sourceFallbackRecoveryFromOptions(retryPlaybackOpts)
           : null;
-        if (!opts.manual && (!opts.startupAutoplay || mediaFailureRecovery)) {
+        if (!isQmkgPlayback && !opts.manual && (!opts.startupAutoplay || mediaFailureRecovery)) {
           var mediaFailureFallback = await tryAutoPlaybackFallback(
             song,
             Object.assign({}, data || {}, { url: null, reason: 'media_start_failed' }),
@@ -1522,7 +1529,7 @@ async function playQueueAt(idx, opts) {
         return false;
       }
       if (catchRecovery && opts.fallbackDepth > 0) return false;
-      if (!isPlaybackRecursionError(err) && token === trackSwitchToken && !opts.manual && (catchRecovery || playQueue.length > 1)) {
+      if (songProviderKey(song) !== 'qmkg' && !isPlaybackRecursionError(err) && token === trackSwitchToken && !opts.manual && (catchRecovery || playQueue.length > 1)) {
         return await skipFailedQueueItem(
           idx,
           token,
@@ -1547,7 +1554,7 @@ async function playQueueAt(idx, opts) {
       return false;
     }
     if (setupRecovery && opts.fallbackDepth > 0) return false;
-      if (!isPlaybackRecursionError(setupErr) && typeof token !== 'undefined' && token === trackSwitchToken && !opts.manual && (setupRecovery || playQueue.length > 1)) {
+      if (songProviderKey(song) !== 'qmkg' && !isPlaybackRecursionError(setupErr) && typeof token !== 'undefined' && token === trackSwitchToken && !opts.manual && (setupRecovery || playQueue.length > 1)) {
         return await skipFailedQueueItem(
           idx,
           token,

@@ -10,6 +10,7 @@ function songDurationLabel(song) {
 }
 function songSourceLabel(song) {
   if (!song) return '未知';
+  if (song.provider === 'qmkg' || song.source === 'qmkg' || song.type === 'qmkg') return '全民 K 歌纯伴奏';
   if (song.provider === 'spotify' || song.source === 'spotify' || song.type === 'spotify' || song.spotifyId || song.spotifyUri) return 'Spotify';
   if (song.provider === 'qq' || song.source === 'qq' || song.type === 'qq') return 'QQ 音乐';
   if (song.provider === 'qishui' || song.source === 'qishui' || song.type === 'qishui') return '汽水音乐';
@@ -115,6 +116,7 @@ function albumDetailUrlForSong(song) {
 }
 function albumDetailMissingText(song) {
   var provider = songProviderKey(song);
+  if (provider === 'qmkg') return '全民 K 歌伴奏暂不支持专辑详情。';
   if (provider === 'kugou') return '当前酷狗歌曲缺少稳定专辑详情接口，暂不能按当前音源打开专辑。';
   if (provider === 'qishui') return '汽水当前作为匹配源接入，暂不能按当前音源打开专辑详情。';
   return '当前歌曲缺少可用专辑 ID，重新搜索或播放新版结果后再打开专辑。';
@@ -440,6 +442,10 @@ function closeTrackDetailModal() {
 function openTrackDetailModal(type, songOverride) {
   var song = songOverride || currentCoverSong();
   if (!song) { showToast('先播放或选择一首歌'); return; }
+  if (songProviderKey(song) === 'qmkg' && (type === 'artist' || type === 'album')) {
+    showToast('全民 K 歌伴奏暂不支持歌手或专辑主页');
+    return;
+  }
   if (immersiveMode) setImmersiveMode(false);
   var heading = document.getElementById('track-detail-heading');
   var body = document.getElementById('track-detail-body');
@@ -630,6 +636,7 @@ function openTrackDetailModal(type, songOverride) {
 }
 function openArtistDetailForSong(song) {
   if (!song) { showToast('未找到歌手信息'); return; }
+  if (songProviderKey(song) === 'qmkg') { showToast('全民 K 歌伴奏暂不支持歌手主页'); return; }
   if (currentArtistId(song) || currentQQArtistMid(song)) {
     openTrackDetailModal('artist', song);
     return;
@@ -647,6 +654,7 @@ function openArtistDetailForSong(song) {
   }
 }
 function resolveArtistSongForDetail(song, artist) {
+  if (songProviderKey(song) === 'qmkg') return Promise.resolve(null);
   var provider = songProviderKey(song) === 'qq' ? 'qq' : 'netease';
   var url = provider === 'qq'
     ? '/api/qq/search?keywords=' + encodeURIComponent(artist) + '&limit=8'
@@ -1188,6 +1196,7 @@ var SONG_ACCOUNT_ACTION_ADAPTERS = {
 };
 function songAccountProvider(song) {
   if (!song || song.type === 'local' || song.type === 'podcast' || song.source === 'podcast') return 'local';
+  if (song.provider === 'qmkg' || song.source === 'qmkg' || song.type === 'qmkg') return 'qmkg';
   if (typeof songProviderKey === 'function') return songProviderKey(song);
   if (song.provider === 'spotify' || song.source === 'spotify' || song.type === 'spotify' || song.spotifyId || song.spotifyUri) return 'spotify';
   if (song.provider === 'qq' || song.source === 'qq' || song.type === 'qq') return 'qq';
@@ -1234,9 +1243,10 @@ function songAccountStateKey(song) {
 }
 function playlistAccountProvider(playlist) {
   var provider = String(playlist && (playlist.provider || playlist.source) || '').toLowerCase();
-  return /^(mineradio|netease|qq|kugou|qishui|spotify)$/.test(provider) ? provider : 'netease';
+  return /^(mineradio|netease|qq|kugou|qishui|spotify|qmkg)$/.test(provider) ? provider : 'netease';
 }
 function songAccountLoginStatus(provider) {
+  if (provider === 'qmkg') return qmkgLoginStatus || {};
   if (provider === 'spotify') return spotifyLoginStatus || {};
   if (provider === 'qishui') return qishuiLoginStatus || {};
   if (provider === 'kugou') return kugouLoginStatus || {};
@@ -1250,6 +1260,7 @@ function isSongAccountLoggedIn(provider) {
   return !!status.loggedIn;
 }
 function songAccountUnsupportedMessage(provider, action) {
+  if (provider === 'qmkg') return '全民 K 歌伴奏暂不支持云端收藏，可收藏到 Mineradio 歌单';
   var adapter = songAccountAdapter(provider);
   if (adapter && adapter.readOnly) return adapter.label + '当前仅支持读取账号收藏，暂不支持写回';
   if (provider === 'qishui') return '汽水音乐当前会话暂不支持此账号操作';
@@ -1265,6 +1276,7 @@ function isSongLiked(song) {
 }
 function ensureLoggedInForAction(provider) {
   provider = provider || 'netease';
+  if (provider === 'qmkg') { showToast(songAccountUnsupportedMessage(provider)); return false; }
   if (isSongAccountLoggedIn(provider)) return true;
   var adapter = songAccountAdapter(provider);
   showToast('登录' + (adapter && adapter.label || '对应平台') + '后可同步账号收藏');
