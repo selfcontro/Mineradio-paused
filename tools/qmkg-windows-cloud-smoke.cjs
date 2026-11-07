@@ -49,15 +49,14 @@ async function run() {
     const status = await (await fetch('/api/qmkg/status')).json();
     const search = await (await fetch('/api/qmkg/search?keywords=' + encodeURIComponent('晴天') + '&limit=1')).json();
     const id = search.songs && search.songs[0] && search.songs[0].id;
-    if (!id) return { loggedIn: status.loggedIn, search: false };
+    if (!id) return { loggedIn: status.loggedIn, search: false, searchError: String(search.error || search.message || search.code || 'No songs returned').replace(/https?:\/\/\S+/g, '[url]').slice(0, 300) };
     const lyric = await (await fetch('/api/qmkg/lyric?id=' + encodeURIComponent(id))).json();
     const media = await (await fetch('/api/qmkg/song/url?id=' + encodeURIComponent(id))).json();
     const after = await (await fetch('/api/qmkg/status')).json();
     return { loggedIn: status.loggedIn, search: true, timedLyrics: /\[\d+:\d+/.test(lyric.lyric || ''), blockedWithoutLogin: media.playable === false, nativeNotRead: after.checkedAt === 0 };
   });
-  assert.equal(api.loggedIn, false);
-  for (const key of ['search', 'timedLyrics', 'blockedWithoutLogin', 'nativeNotRead']) assert.equal(api[key], true, key);
   Object.assign(report.checks, api);
+  const apiPassed = api.loggedIn === false && ['search', 'timedLyrics', 'blockedWithoutLogin', 'nativeNotRead'].every(key => api[key] === true);
   phase = 'shared-login-ui';
   if (uiReady) {
     await page.evaluate(async () => { dismissSplash({ instant: true }); if (typeof closeVisualGuide === 'function') closeVisualGuide(true); await showLoginModal({ provider: 'qmkg' }); });
@@ -87,9 +86,9 @@ async function run() {
   assert.notEqual(cancelled && cancelled.ok, true);
   Object.assign(report.checks, qr);
   report.checks.rendererWithoutErrors = errors.length === 0;
-  report.functionalIntegrationPassed = true;
-  report.passed = uiReady && errors.length === 0;
-  if (!report.passed) { report.failedPhase = 'main-ui-graphics'; process.exitCode = 1; }
+  report.functionalIntegrationPassed = apiPassed;
+  report.passed = uiReady && apiPassed && errors.length === 0;
+  if (!report.passed) { report.failedPhase = !apiPassed ? 'anonymous-search-and-no-login-playback' : 'main-ui-graphics'; process.exitCode = 1; }
   report.limit = 'Anonymous cloud verification only; authenticated cloud playback needs a separate phone confirmation and was not tested.';
 }
 
