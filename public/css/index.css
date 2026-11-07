@@ -9071,6 +9071,35 @@ body.login-guide-active #login-guide-canvas {
   margin: 0
 }
 
+.login-node-providers.login-platform-tabs button.qmkg {
+  grid-template-columns: 18px 35px minmax(0, 1fr) auto 56px;
+}
+.login-node-providers.login-platform-tabs button.qmkg .provider-logo {
+  grid-column: 2;
+}
+.login-node-providers.login-platform-tabs button.qmkg .login-provider-state-badge {
+  color: #ffbd83;
+  background: rgba(255, 173, 94, .12);
+}
+.login-mode-node[hidden], .login-qmkg-panel[hidden] { display: none; }
+.login-auth-drawer.qmkg-mode { grid-template-columns: minmax(0, 1fr); }
+.login-auth-drawer.qmkg-mode > .login-auth-body,
+.login-auth-drawer.qmkg-mode > .login-auth-actions { display: none; }
+.login-qmkg-panel { min-width: 0; font-size: 11px; color: rgba(255, 255, 255, .65); }
+.login-qmkg-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.login-qmkg-panel summary { cursor: pointer; }
+.login-qmkg-panel label { display: block; margin: 10px 0 5px; }
+.login-qmkg-panel input {
+  min-width: 0;
+  flex: 1;
+  padding: 8px;
+  border: 1px solid rgba(255, 255, 255, .18);
+  border-radius: 8px;
+  color: inherit;
+  background: rgba(0, 0, 0, .2);
+  font: inherit;
+}
+
 .login-auth-actions {
   grid-column: 1 / -1;
   justify-content: flex-end;

@@ -213,6 +213,8 @@ function syncAccountProviderOrderUi() {
       var node = document.getElementById('login-provider-' + provider);
       if (node && node.parentNode === parent) parent.appendChild(node);
     });
+    var accompanimentNode = document.getElementById('login-provider-qmkg');
+    if (accompanimentNode && accompanimentNode.parentNode === parent) parent.appendChild(accompanimentNode);
     animateAccountProviderReorder(parent, '[data-login-provider]', beforeRects, 'provider-reorder-moving');
     if (typeof scheduleLoginWorkflowEdges === 'function') scheduleLoginWorkflowEdges('provider-order-ui');
   }

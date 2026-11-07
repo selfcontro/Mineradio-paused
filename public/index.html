@@ -1541,6 +1541,8 @@
                 class="provider-logo">KG</span><b>酷狗音乐</b><small>官方窗口 / Cookie</small><span class="flow-port out" data-login-provider-output="kugou" title="拖到 MR 接入口"></span></button>
             <button id="login-provider-qishui" class="qishui workflow-node" type="button" data-login-provider="qishui" onclick="selectLoginProviderNode('qishui')"><span
                 class="provider-logo">QS</span><b>汽水音乐</b><small>官方扫码 / 抖音确认</small><span class="flow-port out" data-login-provider-output="qishui" title="拖到 MR 接入口"></span></button>
+            <button id="login-provider-qmkg" class="qmkg workflow-node" type="button" data-login-provider="qmkg" onclick="selectLoginProviderNode('qmkg')"><span
+                class="provider-logo">K歌</span><b>全民 K 歌</b><small>Windows 客户端 · 伴奏</small><span class="login-provider-state-badge normal">伴奏</span><span class="flow-port out" data-login-provider-output="qmkg" title="拖到 MR 检测客户端连接"></span></button>
           </div>
           <div class="login-node-hub workflow-node" data-login-node="mr">
             <span class="flow-port in" data-login-mr-target="mr" title="MR 接入口"></span>
@@ -1560,6 +1562,20 @@
             <div id="login-modal-desc" class="desc">使用 <b>网易云音乐 App</b> 扫码，可同步歌单、红心与播客。</div>
             <div id="qr-status">拖动接口到 MR 接入口后开始登录。</div>
           </div>
+          <section id="login-qmkg-panel" class="login-qmkg-panel" aria-label="全民 K 歌客户端连接" hidden>
+            <div class="login-qmkg-actions">
+              <button id="login-qmkg-refresh-btn" class="modal-btn primary" type="button" onclick="refreshQmkgConnection()">检测连接</button>
+              <button class="modal-btn" type="button" onclick="openQmkgAccompanimentSearch()">搜索伴奏</button>
+            </div>
+            <details>
+              <summary>客户端缓存目录（可选）</summary>
+              <label for="login-qmkg-cache-dir">WeSingCache 目录，留空自动查找</label>
+              <div class="qmkg-cache-config">
+                <input id="login-qmkg-cache-dir" type="text" placeholder="例如 D:\WeSingCache" spellcheck="false" autocomplete="off" oninput="this.dataset.edited='true'">
+                <button id="login-qmkg-save-btn" class="modal-btn" type="button" onclick="saveLoginQmkgCacheDirectory()">保存并检测</button>
+              </div>
+            </details>
+          </section>
           <div class="login-auth-body">
             <div id="qr-shell" class="qr-shell">
               <img id="qr-img" src="" alt="">

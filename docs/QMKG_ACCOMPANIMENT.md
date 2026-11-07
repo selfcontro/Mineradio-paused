@@ -4,7 +4,9 @@
 
 ## 使用
 
-登录官方普通 PC 客户端，点击 Mineradio 搜索框，选择「K歌伴奏」并重新检测。未找到缓存时，填写官方客户端的 `WeSingCache` 根目录，而不是安装目录或 `Log` 子目录。搜索、队列和内置歌单保存歌曲 ID 与伴奏标记；每次需要播放时获取有效媒体地址。
+登录官方普通 PC 客户端，打开 Mineradio 右上角的「登录接入」面板，点击第五个「全民 K 歌」节点，再点「检测连接」，成功后可点击「搜索伴奏」。也可以点击搜索框，选择「K歌伴奏」并重新检测。未找到缓存时，填写官方客户端的 `WeSingCache` 根目录，而不是安装目录或 `Log` 子目录。搜索、队列和内置歌单保存歌曲 ID 与伴奏标记；每次需要播放时获取有效媒体地址。
+
+选择平台或打开面板只读取已缓存的连接状态；点击检测、保存目录或拖动端口连接到 MR 才主动检测客户端会话。此节点不显示扫码或 Cookie 导入，不会将全民 K 歌当作其他平台账号；退出账号需在官方客户端完成。
 
 配置优先使用明确指定的目录（`QMKG_CACHE_DIR` 或页面保存的目录），并尝试常见的 Windows 缓存位置。`QMKG_CONFIG_FILE` 只存 `{ "cacheDir": "..." }`，桌面运行时位于 Mineradio 用户数据目录；仓库已忽略默认设置文件。
 
@@ -42,7 +44,7 @@ Windows 请求日志中的真实 Cookie `uid` 必须原样保留，不能用界�
 
 ## 验证
 
-`node --test tests/qmkg-api.test.js tests/qmkg-server.test.js tests/qmkg-frontend.test.js tests/built-in-playlist-library.test.js` 覆盖会话解析/更新、匿名查询、伴奏权限失败、接口边界、伴奏身份持久化、前端路由和换源阻断。
+`node --test tests/qmkg-api.test.js tests/qmkg-server.test.js tests/qmkg-frontend.test.js tests/qmkg-login-panel.test.js tests/built-in-playlist-library.test.js` 覆盖会话解析/更新、匿名查询、伴奏权限失败、接口边界、伴奏身份持久化、平台连接图、前端路由和换源阻断。
 
 真实联调需要开发者自己的已登录官方客户端。不要把登录日志、Cookie、签名音频 URL、私人缓存或测试下载的歌曲提交到仓库。公开仓库的测试仅使用合成凭据和模拟响应。
 

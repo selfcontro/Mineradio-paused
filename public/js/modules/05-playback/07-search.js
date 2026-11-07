@@ -244,6 +244,7 @@ function renderQmkgConnection() {
     if (button) button.disabled = qmkgConnectionBusy;
   });
   panel.classList.toggle('connected', ready);
+  if (typeof renderLoginQmkgConnection === 'function') renderLoginQmkgConnection();
 }
 async function loadQmkgConnectionStatus() {
   if (qmkgConnectionBusy) return;
@@ -258,7 +259,7 @@ async function loadQmkgConnectionStatus() {
   }
   renderQmkgConnection();
 }
-async function updateQmkgConnection(url, body) {
+async function updateQmkgConnection(url, body, inputId) {
   if (qmkgConnectionBusy) return;
   ++qmkgStatusRequestSeq;
   qmkgConnectionBusy = true;
@@ -266,7 +267,7 @@ async function updateQmkgConnection(url, body) {
   try {
     var status = await apiJson(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}), timeoutMs: 15000 });
     qmkgLoginStatus = Object.assign({ provider: 'qmkg' }, status || {});
-    var path = document.getElementById('qmkg-cache-dir');
+    var path = document.getElementById(inputId || 'qmkg-cache-dir');
     if (path && status && !status.error) {
       delete path.dataset.edited;
       path.value = qmkgLoginStatus.cacheDir || '';
