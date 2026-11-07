@@ -7,9 +7,15 @@ if (Test-Path -LiteralPath (Join-Path $installDir 'Mineradio.exe')) { throw 'The
 $installer = (Resolve-Path -LiteralPath 'dist\Mineradio-2.2.2-QMKG-Setup.exe').Path
 $result = Start-Process -FilePath $installer -ArgumentList ('/S /D=' + $installDir) -WindowStyle Hidden -Wait -PassThru
 if ($result.ExitCode -ne 0) { throw ('Installer exit code: ' + $result.ExitCode) }
-$exe = Get-Item -LiteralPath (Join-Path $installDir 'Mineradio.exe')
+$requestedExe = Join-Path $installDir 'Mineradio.exe'
+$candidates = @($requestedExe, 'D:\Mineradio\Mineradio.exe', 'C:\Mineradio\Mineradio.exe', (Join-Path $env:LOCALAPPDATA 'Programs\mineradio\Mineradio.exe'))
+$found = @($candidates | Select-Object -Unique | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf })
+if ($found.Count -ne 1) { throw 'Cannot uniquely locate the app installed in the fresh runner.' }
+$exe = Get-Item -LiteralPath $found[0]
 if ($exe.VersionInfo.ProductVersion -ne '2.2.2') { throw 'Installed version mismatch.' }
 New-Item -ItemType Directory -Path 'cloud-results' -Force | Out-Null
-$report = @{ installed=$true; version=$exe.VersionInfo.ProductVersion; architecture='x64'; installerSHA256=(Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash }
+$report = @{ installed=$true; version=$exe.VersionInfo.ProductVersion; architecture='x64'; customSilentInstallDirHonored=($exe.FullName -eq $requestedExe); installerSHA256=(Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash }
 $report | ConvertTo-Json | Set-Content -LiteralPath 'cloud-results\installation.json' -Encoding utf8
-Write-Output 'Windows 2.2.2 installer completed successfully in the disposable runner directory.'
+('QMKG_INSTALLED_EXE=' + $exe.FullName) >> $env:GITHUB_ENV
+if (-not $report.customSilentInstallDirHonored) { Write-Warning 'The upstream installer ignored /D during silent installation and used its default path in this disposable VM.' }
+Write-Output 'Windows 2.2.2 installer completed successfully in the disposable Windows runner.'
