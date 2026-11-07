@@ -8,11 +8,14 @@ const assert = require('node:assert/strict');
 const reportDir = path.resolve('cloud-results');
 const report = { platform: process.platform, osRelease: os.release(), commit: process.env.GITHUB_SHA || '', checks: {}, authenticatedPlaybackTested: false };
 let app;
+let mainPage;
+let qaUserData;
 let phase = 'prepare-clean-profile';
 async function run() {
   assert.equal(process.platform, 'win32');
   await fs.mkdir(reportDir, { recursive: true });
   const userData = await fs.mkdtemp(path.join(os.tmpdir(), 'qmkg-cloud-clean-'));
+  qaUserData = userData;
   await fs.writeFile(path.join(userData, 'cache-settings.json'), JSON.stringify({ rootPath: path.join(userData, 'cache') }));
   await fs.writeFile(path.join(userData, '.qmkg-settings.json'), JSON.stringify({ cacheDir: '', nativeSessionEnabled: false }));
   // Skip only the local first-run easter egg; no provider account is preloaded.
@@ -20,12 +23,15 @@ async function run() {
   phase = 'launch-installed-app';
   app = await electron.launch({
     executablePath: process.env.QMKG_INSTALLED_EXE,
-    args: ['--mute-audio', '--enable-unsafe-swiftshader'],
+    args: ['--mute-audio', '--enable-unsafe-swiftshader', '--use-angle=swiftshader'],
     env: { ...process.env, MINERADIO_STARTUP_QA_HIDDEN: '1', MINERADIO_STARTUP_QA_USER_DATA: userData, MINERADIO_RUNTIME_NAME: 'MineradioCloud222-' + Date.now(), MINERADIO_STARTUP_QA_EXIT_MS: '0', QMKG_CACHE_DIR: '' },
     timeout: 60000,
   });
   const page = await app.firstWindow();
+  mainPage = page;
   const errors = [];
+  report.rendererErrors = errors;
+  report.cloudSoftwareRendering = true;
   page.on('pageerror', error => errors.push(error.message.replace(/https?:\/\/\S+/g, '[url]').slice(0, 300)));
   await page.waitForFunction(() => document.body && document.body.classList.contains('simple-mode') && typeof openQmkgWebLogin === 'function', null, { timeout: 45000 });
   const identity = await app.evaluate(async ({ app, session }) => ({ version: app.getVersion(), userData: app.getPath('userData'), sessionData: app.getPath('sessionData'), cookies: (await session.fromPartition('persist:mineradio-qmkg-login').cookies.get({ url: 'https://kg.qq.com/' })).length }));
@@ -86,6 +92,16 @@ run().catch(error => {
   report.error = String(error.message || error).replace(/https?:\/\/\S+/g, '[url]').slice(0, 400);
   process.exitCode = 1;
 }).finally(async () => {
+  if (!report.passed && mainPage && !mainPage.isClosed()) {
+    try {
+      report.document = await mainPage.evaluate(() => ({ origin: location.origin, pathname: location.pathname, readyState: document.readyState, bodyClass: document.body && document.body.className, scriptCount: document.scripts.length, title: document.title, loginFunction: typeof openQmkgWebLogin }));
+      await mainPage.screenshot({ path: path.join(reportDir, 'failed-window.png') });
+    } catch (_) {}
+    try {
+      const state = JSON.parse(await fs.readFile(path.join(qaUserData, 'startup-state.json'), 'utf8'));
+      report.startup = { phase: state.phase, navigationReadyPhase: state.navigationReadyPhase || '', lastNavigationError: String(state.lastNavigationError || '').replace(/https?:\/\/\S+/g, '[url]').slice(0, 300) };
+    } catch (_) {}
+  }
   if (app) await app.close().catch(() => {});
   await fs.mkdir(reportDir, { recursive: true });
   await fs.writeFile(path.join(reportDir, 'cloud-report.json'), JSON.stringify(report, null, 2));
