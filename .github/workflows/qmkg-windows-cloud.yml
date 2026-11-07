@@ -57,20 +57,10 @@ jobs:
         run: ./tools/qmkg-cloud-install.ps1
       - name: Install isolated browser test tooling
         shell: pwsh
-        run: npm install --prefix "$env:RUNNER_TEMP/qmkg-test-tools" --no-save --package-lock=false playwright@1.62.1
-      - name: Start installed app and prepare official QR
-        shell: pwsh
-        run: ./tools/qmkg-cloud-interactive.ps1
-      - name: Transfer short-lived official QR for the user's phone confirmation
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: qmkg-official-qr-${{ github.run_id }}
-          path: cloud-qr/official-login.png
-          retention-days: 1
-          if-no-files-found: error
-      - name: Await phone confirmation and verify accompaniment playback and lyrics
-        shell: pwsh
-        run: ./tools/qmkg-cloud-interactive.ps1 -WaitForCompletion
+        run: npm install --prefix "$env:RUNNER_TEMP/qmkg-test-tools" --no-save --package-lock=false playwright@1.62.1 @actions/artifact@2.3.2
+      - name: Official phone login, accompaniment playback and synchronized lyrics
+        timeout-minutes: 12
+        uses: ./.github/actions/qmkg-cloud-test
       - name: Upload sanitized cloud report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

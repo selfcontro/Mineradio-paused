@@ -12,9 +12,31 @@ let app;
 let mainPage;
 let qaUserData;
 let phase = 'prepare-clean-profile';
+let progressTimer;
+let progressBusy = false;
+async function saveProgress() {
+  if (progressBusy) return;
+  progressBusy = true;
+  try {
+    const snapshot = { phase, updatedAt: new Date().toISOString() };
+    if (app) {
+      snapshot.auth = await Promise.race([
+        app.evaluate(() => globalThis.__mineradioCloudAuthDiagnostic || {}),
+        new Promise(resolve => setTimeout(() => resolve({ probeTimeout: true }), 3000)),
+      ]);
+    }
+    await fs.writeFile(path.join(reportDir, 'progress.json'), JSON.stringify(snapshot, null, 2));
+  } catch (_) {} finally { progressBusy = false; }
+}
+async function bounded(operation, milliseconds = 60000) {
+  let timer;
+  try { return await Promise.race([operation, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Cloud operation timed out at ' + phase)), milliseconds); })]); }
+  finally { clearTimeout(timer); }
+}
 async function run() {
   assert.equal(process.platform, 'win32');
   await fs.mkdir(reportDir, { recursive: true });
+  progressTimer = setInterval(saveProgress, 5000);
   const userData = await fs.mkdtemp(path.join(os.tmpdir(), 'qmkg-cloud-clean-'));
   qaUserData = userData;
   await fs.writeFile(path.join(userData, 'cache-settings.json'), JSON.stringify({ rootPath: path.join(userData, 'cache') }));
@@ -30,6 +52,18 @@ async function run() {
   });
   const page = await app.firstWindow();
   mainPage = page;
+  await app.evaluate(({ app }) => {
+    const load = process.mainModule.require.bind(process.mainModule);
+    const server = load(load('node:path').join(app.getAppPath(), 'server.js'));
+    const originalImport = server.importQmkgCookie;
+    globalThis.__mineradioCloudAuthDiagnostic = { attempts: 0, accepted: false };
+    server.importQmkgCookie = async (...args) => {
+      const diagnostic = globalThis.__mineradioCloudAuthDiagnostic;
+      diagnostic.attempts++;
+      try { const result = await originalImport(...args); diagnostic.accepted = result && result.authValidated === true; return result; }
+      catch (error) { diagnostic.lastError = /^QMKG_[A-Z_]+$/.test(String(error.code || '')) ? error.code : 'QMKG_IMPORT_FAILED'; throw error; }
+    };
+  });
   const errors = [];
   report.rendererErrors = errors;
   report.requestedSoftwareRendering = true;
@@ -90,20 +124,24 @@ async function run() {
     await fs.mkdir('cloud-qr', { recursive: true });
     await login.locator('.j_login_img canvas').screenshot({ path: 'cloud-qr/official-login.png' });
     await fs.writeFile('cloud-qr/ready.json', JSON.stringify({ createdAt: new Date().toISOString() }));
-    const auth = await loginResult;
+    const { DefaultArtifactClient } = require(path.join(path.dirname(process.env.PLAYWRIGHT_NODE_DIR), '@actions/artifact'));
+    await new DefaultArtifactClient().uploadArtifact('qmkg-official-qr-' + process.env.GITHUB_RUN_ID,
+      [path.resolve('cloud-qr/official-login.png')], path.resolve('cloud-qr'), { retentionDays: 1 });
+    console.log('Official QR is ready; awaiting phone confirmation in this foreground process.');
+    const auth = await bounded(loginResult, 310000);
     report.login = { ok: auth && auth.ok === true, source: auth && auth.source, authValidated: auth && auth.authValidated === true, error: auth && auth.error };
     assert.equal(report.login.ok, true, 'Official scan did not complete');
     assert.equal(report.login.source, 'web');
     assert.equal(report.login.authValidated, true);
     phase = 'authenticated-accompaniment-and-lyrics';
-    const proof = await page.evaluate(async () => {
+    const proof = await bounded(page.evaluate(async () => {
       const search = await (await fetch('/api/qmkg/search?keywords=' + encodeURIComponent('晴天') + '&limit=5')).json();
       let selected;
       for (const song of search.songs || []) {
         const media = await (await fetch('/api/qmkg/song/url?id=' + encodeURIComponent(song.id))).json();
         const lyric = await (await fetch('/api/qmkg/lyric?id=' + encodeURIComponent(song.id))).json();
         if (!media.playable || !media.url || !/\[\d+:\d+/.test(lyric.lyric || '')) continue;
-        const response = await fetch('/api/audio?url=' + encodeURIComponent(media.url), { headers: { Range: 'bytes=0-1023' } });
+        const response = await fetch('/api/audio?url=' + encodeURIComponent(media.url), { headers: { Range: 'bytes=0-1023' }, signal: AbortSignal.timeout(30000) });
         const bytes = new Uint8Array(await response.arrayBuffer());
         selected = { song, accompaniment: media.accompaniment === true && media.playbackMode === 'accompaniment',
           range206: response.status === 206, mp4: String.fromCharCode(...bytes.slice(4, 8)) === 'ftyp' };
@@ -115,7 +153,7 @@ async function run() {
       playQueue = [selected.song]; currentIdx = -1;
       await playQueueAt(0);
       return { playable: true, accompaniment: selected.accompaniment, range206: selected.range206, mp4: selected.mp4 };
-    });
+    }), 120000);
     for (const key of ['playable', 'accompaniment', 'range206', 'mp4']) assert.equal(proof[key], true, key);
     await page.waitForFunction(() => audio && !audio.paused && !audio.error && audio.readyState >= 3 && audio.currentTime > 0.5 && lyricsLines.length >= 4, null, { timeout: 45000 });
     const startTime = await page.evaluate(() => audio.currentTime);
@@ -154,10 +192,13 @@ run().catch(error => {
   report.error = String(error.message || error).replace(/https?:\/\/\S+/g, '[url]').slice(0, 400);
   process.exitCode = 1;
 }).finally(async () => {
+  await saveProgress();
+  clearInterval(progressTimer);
+  await fs.writeFile(path.join(reportDir, 'cloud-report.json'), JSON.stringify(report, null, 2));
   if (!report.passed && mainPage && !mainPage.isClosed()) {
     try {
       report.document = await mainPage.evaluate(() => ({ origin: location.origin, pathname: location.pathname, readyState: document.readyState, bodyClass: document.body && document.body.className, scriptCount: document.scripts.length, title: document.title, loginFunction: typeof openQmkgWebLogin }));
-      await mainPage.screenshot({ path: path.join(reportDir, 'failed-window.png') });
+      if (!interactiveLogin) await mainPage.screenshot({ path: path.join(reportDir, 'failed-window.png') });
     } catch (_) {}
     try {
       const state = JSON.parse(await fs.readFile(path.join(qaUserData, 'startup-state.json'), 'utf8'));

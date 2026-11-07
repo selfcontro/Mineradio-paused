@@ -1,0 +1,5 @@
+name: Verify installed K-song playback
+description: Keep Electron and official phone login in one foreground action process
+runs:
+  using: node24
+  main: run.cjs
