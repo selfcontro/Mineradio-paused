@@ -47,9 +47,10 @@ async function run() {
   phase = 'anonymous-search-and-no-login-playback';
   const api = await page.evaluate(async () => {
     const status = await (await fetch('/api/qmkg/status')).json();
-    const search = await (await fetch('/api/qmkg/search?keywords=' + encodeURIComponent('晴天') + '&limit=1')).json();
+    const response = await fetch('/api/qmkg/search?keywords=' + encodeURIComponent('晴天') + '&limit=1');
+    const search = await response.json();
     const id = search.songs && search.songs[0] && search.songs[0].id;
-    if (!id) return { loggedIn: status.loggedIn, search: false, searchError: String(search.error || search.message || search.code || 'No songs returned').replace(/https?:\/\/\S+/g, '[url]').slice(0, 300) };
+    if (!id) return { loggedIn: status.loggedIn, search: false, searchHttp: response.status, searchKeys: Object.keys(search), searchTotal: search.total, searchRows: Array.isArray(search.songs) ? search.songs.length : null, searchError: String(search.error || search.message || search.code || 'No songs returned').replace(/https?:\/\/\S+/g, '[url]').slice(0, 300) };
     const lyric = await (await fetch('/api/qmkg/lyric?id=' + encodeURIComponent(id))).json();
     const media = await (await fetch('/api/qmkg/song/url?id=' + encodeURIComponent(id))).json();
     const after = await (await fetch('/api/qmkg/status')).json();
