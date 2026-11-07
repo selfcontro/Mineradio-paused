@@ -24,16 +24,20 @@ async function run() {
   app = await electron.launch({
     executablePath: process.env.QMKG_INSTALLED_EXE,
     args: ['--mute-audio', '--enable-unsafe-swiftshader', '--use-angle=swiftshader'],
-    env: { ...process.env, MINERADIO_STARTUP_QA_HIDDEN: '1', MINERADIO_STARTUP_QA_USER_DATA: userData, MINERADIO_RUNTIME_NAME: 'MineradioCloud222-' + Date.now(), MINERADIO_STARTUP_QA_EXIT_MS: '0', QMKG_CACHE_DIR: '' },
+    env: { ...process.env, MINERADIO_STARTUP_QA_HIDDEN: '1', MINERADIO_STARTUP_QA_USER_DATA: userData, MINERADIO_RUNTIME_NAME: 'MineradioCloud222-' + Date.now(), MINERADIO_STARTUP_QA_EXIT_MS: '0', MINERADIO_IGNORE_GPU_BLOCKLIST: '1', QMKG_CACHE_DIR: '' },
     timeout: 60000,
   });
   const page = await app.firstWindow();
   mainPage = page;
   const errors = [];
   report.rendererErrors = errors;
-  report.cloudSoftwareRendering = true;
+  report.requestedSoftwareRendering = true;
+  report.graphics = await app.evaluate(({ app }) => ({ angle: app.commandLine.getSwitchValue('use-angle'), features: app.getGPUFeatureStatus() }));
   page.on('pageerror', error => errors.push(error.message.replace(/https?:\/\/\S+/g, '[url]').slice(0, 300)));
-  await page.waitForFunction(() => document.body && document.body.classList.contains('simple-mode') && typeof openQmkgWebLogin === 'function', null, { timeout: 45000 });
+  await page.waitForFunction(() => document.body && location.hostname === '127.0.0.1' && window.desktopWindow && typeof window.desktopWindow.openQmkgMusicLogin === 'function', null, { timeout: 45000 });
+  try { await page.waitForFunction(() => document.body.classList.contains('simple-mode'), null, { timeout: 15000 }); } catch (_) {}
+  const uiReady = await page.evaluate(() => document.body.classList.contains('simple-mode'));
+  report.checks.mainUiReady = uiReady;
   const identity = await app.evaluate(async ({ app, session }) => ({ version: app.getVersion(), userData: app.getPath('userData'), sessionData: app.getPath('sessionData'), cookies: (await session.fromPartition('persist:mineradio-qmkg-login').cookies.get({ url: 'https://kg.qq.com/' })).length }));
   assert.equal(identity.version, '2.2.2');
   assert.equal(identity.userData.toLowerCase(), userData.toLowerCase());
@@ -55,12 +59,14 @@ async function run() {
   for (const key of ['search', 'timedLyrics', 'blockedWithoutLogin', 'nativeNotRead']) assert.equal(api[key], true, key);
   Object.assign(report.checks, api);
   phase = 'shared-login-ui';
-  await page.evaluate(async () => { dismissSplash({ instant: true }); if (typeof closeVisualGuide === 'function') closeVisualGuide(true); await showLoginModal({ provider: 'qmkg' }); });
-  await page.waitForTimeout(800);
-  assert.equal(await page.locator('#login-mode-official').isVisible(), true);
-  assert.equal(await page.locator('#login-mode-cookie').isVisible(), true);
+  if (uiReady) {
+    await page.evaluate(async () => { dismissSplash({ instant: true }); if (typeof closeVisualGuide === 'function') closeVisualGuide(true); await showLoginModal({ provider: 'qmkg' }); });
+    await page.waitForTimeout(800);
+    assert.equal(await page.locator('#login-mode-official').isVisible(), true);
+    assert.equal(await page.locator('#login-mode-cookie').isVisible(), true);
+  }
   await page.screenshot({ path: path.join(reportDir, 'platform-panel.png') });
-  report.checks.sharedLoginUi = true;
+  report.checks.sharedLoginUi = uiReady;
   phase = 'official-anonymous-qr';
   const windowPromise = app.waitForEvent('window', { timeout: 45000 });
   const loginResult = page.evaluate(() => window.desktopWindow.openQmkgMusicLogin({ forceReauth: true }));
@@ -80,9 +86,10 @@ async function run() {
   const cancelled = await loginResult;
   assert.notEqual(cancelled && cancelled.ok, true);
   Object.assign(report.checks, qr);
-  assert.equal(errors.length, 0);
-  report.checks.rendererWithoutErrors = true;
-  report.passed = true;
+  report.checks.rendererWithoutErrors = errors.length === 0;
+  report.functionalIntegrationPassed = true;
+  report.passed = uiReady && errors.length === 0;
+  if (!report.passed) { report.failedPhase = 'main-ui-graphics'; process.exitCode = 1; }
   report.limit = 'Anonymous cloud verification only; authenticated cloud playback needs a separate phone confirmation and was not tested.';
 }
 
