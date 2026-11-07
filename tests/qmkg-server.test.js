@@ -11,6 +11,8 @@ test('local accompaniment API routes preserve provider data and hide credentials
   const client = {
     getStatus: async (options) => { calls.push(['status', options]); return { provider: 'qmkg', loggedIn: false, checkedAt: 0 }; },
     configure: async (options) => { calls.push(['configure', options]); return { provider: 'qmkg', cacheDir: options.cacheDir }; },
+    importCookie: async (cookie, options) => { calls.push(['import', cookie, options]); return { provider: 'qmkg', loggedIn: true, authValidated: true }; },
+    clearSession: async () => { calls.push(['logout']); return { provider: 'qmkg', loggedIn: false, sessionReady: false }; },
     search: async (keywords, options) => { calls.push(['search', keywords, options]); return { provider: 'qmkg', songs: [{ id: 'abc123', provider: 'qmkg', accompaniment: true }], hasMore: false }; },
     getSongInfo: async (id) => ({ provider: 'qmkg', song: { id } }),
     getLyric: async () => ({ provider: 'qmkg', lyric: '[00:01.00]同步歌词' }),
@@ -55,6 +57,15 @@ test('local accompaniment API routes preserve provider data and hide credentials
   assert.equal(await rawStatus({ 'Sec-Fetch-Site': 'cross-site' }), 403);
   assert.equal((await json('/api/qmkg/status', { headers: { Origin: base } })).status, 200);
   const post = { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' };
+  assert.equal((await json('/api/qmkg/login/cookie')).status, 405);
+  assert.equal((await json('/api/qmkg/login/cookie', { ...post, body: JSON.stringify({ cookie: 123 }) })).status, 400);
+  assert.equal((await json('/api/qmkg/login/cookie', { ...post, headers: { ...post.headers, Origin: 'https://unrelated.example' }, body: JSON.stringify({ cookie: 'fixture' }) })).status, 403);
+  const imported = await json('/api/qmkg/login/cookie', { ...post, body: JSON.stringify({ cookie: 'uid=fixture;openid=fixture;openkey=fixture' }) });
+  assert.equal(imported.body.authValidated, true);
+  assert.deepEqual(calls.at(-1), ['import', 'uid=fixture;openid=fixture;openkey=fixture', { source: 'cookie' }]);
+  assert.equal((await json('/api/qmkg/logout')).status, 405);
+  assert.equal((await json('/api/qmkg/logout', post)).body.loggedIn, false);
+  assert.deepEqual(calls.at(-1), ['logout']);
   await json('/api/qmkg/session/refresh', post);
   assert.deepEqual(calls.at(-1), ['status', { refresh: true }]);
   assert.equal((await json('/api/qmkg/session/refresh')).status, 405);

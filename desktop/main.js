@@ -25,6 +25,7 @@ const {
 const { extractKugouAuth } = require('../kugou-api');
 const { qishuiCookieHasLogin } = require('../qishui-api');
 const { clearSpotifyToken } = require('../spotify-api');
+const { createQmkgLoginBridge } = require('./qmkg-login-bridge');
 
 registerWallpaperEngineScheme(protocol);
 registerLocalMusicScheme(protocol);
@@ -134,6 +135,20 @@ const KUGOU_LOGIN_URL = 'https://www.kugou.com/';
 const KUGOU_LOGIN_WARMUP_URL = 'https://www.kugou.com/newuc/user/uc/type=edit';
 const SPOTIFY_LOGIN_PARTITION = 'persist:mineradio-spotify-login';
 const SPOTIFY_OAUTH_TIMEOUT_MS = 3 * 60 * 1000;
+const qmkgLoginBridge = createQmkgLoginBridge({
+  BrowserWindow,
+  session,
+  icon: APP_ICON_ICO,
+  importCookie: async (cookie, options) => {
+    await ensureLocalServerStarted();
+    if (!localServer || typeof localServer.importQmkgCookie !== 'function') throw new Error('QMKG_LOCAL_SERVER_UNAVAILABLE');
+    return localServer.importQmkgCookie(cookie, options);
+  },
+  clearCookie: async () => {
+    if (!localServer || typeof localServer.clearQmkgSession !== 'function') throw new Error('QMKG_LOCAL_SERVER_UNAVAILABLE');
+    return localServer.clearQmkgSession();
+  },
+});
 
 // Keep app-owned settings and provider credentials independent from the
 // user-selectable Chromium cache. app.setName() must run before the first
@@ -2989,6 +3004,14 @@ async function clearNeteaseMusicLoginSession() {
   return { ok: true };
 }
 
+function openQmkgMusicLoginWindow(owner, options) {
+  return qmkgLoginBridge.open(owner, options);
+}
+
+function clearQmkgMusicLoginSession() {
+  return qmkgLoginBridge.clear();
+}
+
 async function clearQishuiMusicLoginSession() {
   const qishuiQrLogin = require('../qishui-qr-login');
   await qishuiQrLogin.clear();
@@ -3327,6 +3350,7 @@ async function clearAllProviderLoginState(reason) {
     clearNeteaseMusicLoginSession(),
     clearQQMusicLoginSession(),
     clearKugouMusicLoginSession(),
+    clearQmkgMusicLoginSession(),
     clearQishuiMusicLoginSession(),
     clearSpotifyMusicLoginSession(),
   ]);
@@ -4864,6 +4888,18 @@ ipcMain.handle('qishui-music-clear-login', async () => {
   return clearQishuiMusicLoginSession();
 });
 
+ipcMain.handle('qmkg-music-open-login', async (event, options) => {
+  if (!isTrustedMainWindowIpc(event)) return { ok: false, error: 'UNTRUSTED_SENDER' };
+  if (!loginEasterEggGate.isUnlocked()) return loginEasterEggLockedResult();
+  return openQmkgMusicLoginWindow(getSenderWindow(event), options || {});
+});
+
+ipcMain.handle('qmkg-music-clear-login', async (event) => {
+  if (!isTrustedMainWindowIpc(event)) return { ok: false, error: 'UNTRUSTED_SENDER' };
+  try { return await clearQmkgMusicLoginSession(); }
+  catch (_) { return { ok: false, provider: 'qmkg', error: 'QMKG_LOGOUT_FAILED', message: '全民 K 歌退出失败，请稍后重试。' }; }
+});
+
 ipcMain.handle('mineradio-open-update-page', async (event, value) => {
   try {
     if (!isTrustedMainWindowIpc(event)) return { ok: false, error: 'UNTRUSTED_SENDER' };
@@ -5024,6 +5060,7 @@ function configureLocalServerEnvironment(port) {
   process.env.KUGOU_COOKIE_FILE = path.join(STABLE_USER_DATA_PATH, '.kugou-cookie');
   process.env.QISHUI_COOKIE_FILE = path.join(STABLE_USER_DATA_PATH, '.qishui-cookie');
   process.env.QMKG_CONFIG_FILE = path.join(STABLE_USER_DATA_PATH, '.qmkg-settings.json');
+  process.env.QMKG_COOKIE_FILE = path.join(STABLE_USER_DATA_PATH, '.qmkg-cookie');
   process.env.QISHUI_TOKEN_FILE = path.join(STABLE_USER_DATA_PATH, '.qishui-token');
   process.env.QISHUI_QR_CONFIG_FILE = path.join(STABLE_USER_DATA_PATH, '.qishui-qr-login.json');
   process.env.MINERADIO_LISTEN_SYNC_FILE = path.join(STABLE_USER_DATA_PATH, 'listen-sync-journal.json');

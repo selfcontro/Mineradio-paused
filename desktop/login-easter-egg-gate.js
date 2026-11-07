@@ -14,6 +14,7 @@ const LOGIN_EASTER_EGG_CREDENTIAL_FILES = [
   '.kugou-vip-evidence.json',
   '.qishui-cookie',
   '.qishui-token',
+  '.qmkg-cookie',
   '.spotify-token.json',
 ];
 

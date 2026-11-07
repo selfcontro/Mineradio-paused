@@ -1,7 +1,8 @@
 'use strict';
 
 // Protocol reference: DBeidachazi/KGSing (MIT), and a read-only Windows WeSing
-// interoperability check. Account fields come only from the user's own client.
+// interoperability check. Account fields come only from the user's official
+// web login, an explicitly imported Cookie, or the optional Windows client.
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const crypto = require('node:crypto');
@@ -27,6 +28,9 @@ const MESSAGES = Object.freeze({
   QMKG_INVALID_MEDIA_URL: '全民 K 歌返回的伴奏地址暂不受支持。',
   QMKG_TRACK_ID_INVALID: '全民 K 歌歌曲标识无效。',
   QMKG_SEARCH_INVALID: '请输入有效的歌曲名或歌手名。',
+  QMKG_COOKIE_INVALID: '全民 K 歌 Cookie 不完整，需要 uid、openid 和 openkey。请从官方网页登录会话重新导入。',
+  QMKG_COOKIE_STORAGE_FAILED: '全民 K 歌登录状态保存失败，请重试。',
+  QMKG_OPERATION_CANCELLED: '登录操作已取消，请重新操作。',
 });
 
 function failure(code) {
@@ -41,6 +45,24 @@ function csrfToken(openkey) {
   return value & 2147483647;
 }
 
+function parseCookie(text) {
+  if (typeof text !== 'string' || text.length > 32768 || /[\r\n\x00]/.test(text)) return null;
+  text = text.replace(/^\s*Cookie:\s*/i, '');
+  const fields = {};
+  for (const part of text.split(';')) {
+    const separator = part.indexOf('=');
+    if (separator < 1) continue;
+    const name = part.slice(0, separator).trim();
+    const value = part.slice(separator + 1).trim();
+    if (!COOKIE_FIELDS.has(name)) continue;
+    if (Object.hasOwn(fields, name) || /[\x00-\x1f\x7f;]/.test(value)) return null;
+    fields[name] = value;
+  }
+  if (!fields.uid || !fields.openid || !fields.openkey) return null;
+  const cookie = Object.entries(fields).map(([key, value]) => key + '=' + value).join(';');
+  return { cookie, openkey: fields.openkey, fingerprint: crypto.createHash('sha256').update(cookie).digest('hex') };
+}
+
 function latestCookieRecord(text) {
   // Do not combine individual fields from different requests or use the UI's
   // strLoginUID: that identity can differ from the actual HTTP cookie uid.
@@ -48,24 +70,7 @@ function latestCookieRecord(text) {
   let latest = null;
   for (const match of text.matchAll(pattern)) latest = match;
   if (!latest) return null;
-  const fields = {};
-  for (const part of latest[1].split(';')) {
-    const separator = part.indexOf('=');
-    if (separator < 1) continue;
-    const name = part.slice(0, separator).trim();
-    const value = part.slice(separator + 1).trim();
-    if (COOKIE_FIELDS.has(name)) {
-      if (Object.hasOwn(fields, name) || /[\x00-\x1f\x7f;]/.test(value)) return { session: null };
-      fields[name] = value;
-    }
-  }
-  if (!fields.uid || !fields.openid || !fields.openkey) return { session: null };
-  const cookie = Object.entries(fields).map(([key, value]) => key + '=' + value).join(';');
-  return { session: {
-    cookie,
-    openkey: fields.openkey,
-    fingerprint: crypto.createHash('sha256').update(cookie).digest('hex'),
-  } };
+  return { session: parseCookie(latest[1]) };
 }
 
 function decodeLog(bytes) {
@@ -114,6 +119,11 @@ function createQmkgClient(options = {}) {
   const platform = options.platform || process.platform;
   const paths = platform === 'win32' ? path.win32 : path;
   const configFile = options.configFile || env.QMKG_CONFIG_FILE || '';
+  const cookieFile = options.cookieFile || env.QMKG_COOKIE_FILE || '';
+  const credentialCodec = options.credentialCodec || {
+    encode: value => ({ encoding: 'local', value }),
+    decode: value => value && value.encoding === 'local' ? value.value : '',
+  };
   const timeoutMs = Math.max(1, Number(options.timeoutMs) || 12000);
   let configuredCacheDir = '';
   let configLoaded;
@@ -124,6 +134,13 @@ function createQmkgClient(options = {}) {
   let authValidated = false;
   let checkedAt = 0;
   let refreshPending = null;
+  let credentialLoaded;
+  let nativeSessionEnabled = true;
+  let sessionSource = 'none';
+  let profile = {};
+  let authGeneration = 0;
+  let persistenceQueue = Promise.resolve();
+  let validationSongId = options.validationSongId || '';
   const rejectedSessions = new Set();
 
   function normalizeDirectory(raw) {
@@ -144,6 +161,7 @@ function createQmkgClient(options = {}) {
           if (text.length > 16384) throw failure('QMKG_CONFIG_INVALID');
           const config = JSON.parse(text);
           configuredCacheDir = normalizeDirectory(config.cacheDir);
+          nativeSessionEnabled = config.nativeSessionEnabled !== false;
         } catch (error) {
           if (error.code !== 'ENOENT') configError = 'QMKG_CONFIG_INVALID';
         }
@@ -154,6 +172,75 @@ function createQmkgClient(options = {}) {
       }
     })();
     await configLoaded;
+  }
+
+  async function atomicJson(filename, value, code) {
+    if (!filename) return;
+    const temporary = filename + '.tmp-' + process.pid + '-' + crypto.randomBytes(4).toString('hex');
+    try {
+      await io.mkdir(paths.dirname(filename), { recursive: true });
+      await io.writeFile(temporary, JSON.stringify(value) + '\n', { encoding: 'utf8', mode: 0o600 });
+      await io.rename(temporary, filename);
+    } catch (_) {
+      try { await io.unlink(temporary); } catch (_) {}
+      throw failure(code);
+    }
+  }
+
+  function serializePersistence(operation) {
+    const result = persistenceQueue.then(operation, operation);
+    persistenceQueue = result.catch(() => {});
+    return result;
+  }
+
+  function cleanProfile(value) {
+    value = value && typeof value === 'object' ? value : {};
+    let avatar = '';
+    try {
+      const url = new URL(String(value.avatar || value.head || ''));
+      if (url.protocol === 'https:' && /(^|\.)(qq\.com|qpic\.cn|qlogo\.cn)$/i.test(url.hostname) && !url.username && !url.password) avatar = url.href;
+    } catch (_) {}
+    return {
+      nickname: String(value.nick || value.nickname || '').replace(/[\x00-\x1f]/g, '').slice(0, 100),
+      userId: String(value.login_uid || value.userId || '').replace(/[\x00-\x1f]/g, '').slice(0, 128),
+      avatar,
+    };
+  }
+
+  async function loadCredential() {
+    if (!credentialLoaded) credentialLoaded = (async () => {
+      if (!cookieFile) return;
+      const generation = authGeneration;
+      try {
+        const text = await io.readFile(cookieFile, 'utf8');
+        // A damaged imported account must never fall back to a different
+        // account from native logs, even if its preferences file was lost.
+        if (generation === authGeneration) nativeSessionEnabled = false;
+        if (text.length > 65536) throw failure('QMKG_COOKIE_INVALID');
+        const saved = JSON.parse(text);
+        if (saved.version !== 1) throw failure('QMKG_COOKIE_INVALID');
+        const decoded = await credentialCodec.decode(saved.credential);
+        const parsed = parseCookie(decoded);
+        if (!parsed) throw failure('QMKG_COOKIE_INVALID');
+        if (generation !== authGeneration || session) return;
+        session = parsed;
+        sessionSource = saved.source === 'web' ? 'web' : 'cookie';
+        profile = cleanProfile(saved.profile);
+        nativeSessionEnabled = false;
+        authValidated = false;
+        sessionError = '';
+      } catch (error) {
+        if (generation === authGeneration && error.code !== 'ENOENT') sessionError = 'QMKG_COOKIE_INVALID';
+      }
+    })();
+    await credentialLoaded;
+  }
+
+  async function saveNativePreference(enabled) {
+    const config = { cacheDir: configuredCacheDir };
+    if (!enabled) config.nativeSessionEnabled = false;
+    await atomicJson(configFile, config, 'QMKG_CONFIG_WRITE_FAILED');
+    nativeSessionEnabled = enabled;
   }
 
   function candidateRoots() {
@@ -185,6 +272,7 @@ function createQmkgClient(options = {}) {
 
   async function discoverSession() {
     await loadConfig();
+    const generation = authGeneration;
     if (platform !== 'win32') {
       session = null;
       sessionError = 'QMKG_PLATFORM_UNSUPPORTED';
@@ -229,13 +317,18 @@ function createQmkgClient(options = {}) {
       } catch (_) { /* Locked or removed logs must not expose local paths/errors. */ }
     }
     const next = record && record.session;
+    if (generation !== authGeneration) return;
     const unchanged = !!(session && next && session.fingerprint === next.fingerprint);
     if (next && !rejectedSessions.has(next.fingerprint)) {
       session = next;
+      sessionSource = 'windows-wesing-log';
+      profile = {};
       sessionError = '';
       if (!unchanged) authValidated = false;
     } else {
       session = null;
+      sessionSource = 'none';
+      profile = {};
       authValidated = false;
       sessionError = next && rejectedSessions.has(next.fingerprint) ? 'QMKG_SESSION_EXPIRED' : 'QMKG_SESSION_MISSING';
     }
@@ -249,9 +342,11 @@ function createQmkgClient(options = {}) {
 
   function status() {
     const available = !!session;
-    const error = sessionError || configError;
+    const error = available ? '' : (sessionError || configError);
     return {
-      provider: 'qmkg', source: 'windows-wesing-log',
+      provider: 'qmkg', source: available ? sessionSource : 'none',
+      nickname: available ? profile.nickname || '全民 K 歌' : '全民 K 歌',
+      userId: available ? profile.userId || '' : '', avatar: available ? profile.avatar || '' : '',
       configured: !!configuredCacheDir,
       cacheDir: configuredCacheDir || activeCacheDir || '',
       connectionAvailable: available, loggedIn: available,
@@ -260,34 +355,47 @@ function createQmkgClient(options = {}) {
       checkedAt, error: error || '',
       message: error ? MESSAGES[error] : available
         ? (authValidated ? '已验证全民 K 歌伴奏连接。' : '已读取本地会话，播放时将验证连接。')
-        : '在官方客户端登录并打开歌曲后，点击检测连接。',
+        : '请扫码登录全民 K 歌，或导入官方登录 Cookie。',
     };
   }
 
   async function getStatus({ refresh = false } = {}) {
     await loadConfig();
-    if (refresh) await refreshSession();
+    await loadCredential();
+    if (refresh) {
+      const generation = ++authGeneration;
+      await serializePersistence(async () => {
+        if (generation !== authGeneration) return;
+        if (cookieFile) { try { await io.unlink(cookieFile); } catch (error) { if (error.code !== 'ENOENT') throw failure('QMKG_COOKIE_STORAGE_FAILED'); } }
+        await saveNativePreference(true);
+      });
+      if (generation !== authGeneration) return status();
+      session = null;
+      sessionSource = 'none';
+      profile = {};
+      authValidated = false;
+      await refreshSession();
+    }
     return status();
   }
 
   async function configure({ cacheDir } = {}) {
     await loadConfig();
+    await loadCredential();
     const value = normalizeDirectory(cacheDir);
+    const generation = ++authGeneration;
     // Finish an existing detection before changing roots. Its result must not
     // become the account for a different directory selected by the user.
     if (refreshPending) await refreshPending;
-    if (configFile) {
-      const temporary = configFile + '.tmp-' + process.pid + '-' + crypto.randomBytes(4).toString('hex');
-      try {
-        await io.mkdir(paths.dirname(configFile), { recursive: true });
-        await io.writeFile(temporary, JSON.stringify({ cacheDir: value }, null, 2) + '\n', 'utf8');
-        await io.rename(temporary, configFile);
-      } catch (_) {
-        try { await io.unlink(temporary); } catch (_) {}
-        throw failure('QMKG_CONFIG_WRITE_FAILED');
-      }
-    }
-    configuredCacheDir = value;
+    await serializePersistence(async () => {
+      if (generation !== authGeneration) return;
+      await atomicJson(configFile, { cacheDir: value }, 'QMKG_CONFIG_WRITE_FAILED');
+      if (generation !== authGeneration) return;
+      configuredCacheDir = value;
+      nativeSessionEnabled = true;
+      if (cookieFile) { try { await io.unlink(cookieFile); } catch (error) { if (error.code !== 'ENOENT') throw failure('QMKG_COOKIE_STORAGE_FAILED'); } }
+    });
+    if (generation !== authGeneration) return status();
     activeCacheDir = '';
     configError = '';
     session = null;
@@ -297,14 +405,93 @@ function createQmkgClient(options = {}) {
     return status();
   }
 
-  async function requestText(url, headers = {}) {
+  function songUrlDescriptor(id) {
+    return { ns: 'mini_kg_song', ns_inbuf: 'proto_mini_kg_song', cmd: 'GetSongUrl|96|1',
+      data: { ksong_mid: id }, mapExt: { l5api: { modid: 1209409, cmd: 65536 },
+        wnsConfig: { appid: 1000557 }, dcapi: { interfaceId: 114300187 } } };
+  }
+
+  async function importCookie(raw, { source = 'cookie' } = {}) {
+    const candidate = parseCookie(raw);
+    if (!candidate) throw failure('QMKG_COOKIE_INVALID');
+    await loadConfig();
+    await loadCredential();
+    const generation = ++authGeneration;
+    if (!validationSongId) {
+      const found = await search('晴天', { limit: 1 });
+      validationSongId = found.songs[0] && found.songs[0].id || '';
+      if (!validationSongId) throw failure('QMKG_REMOTE_ERROR');
+    }
+    // A successful web login alone does not prove accompaniment authorization.
+    // Validate this exact credential against the protected accompaniment command.
+    await proxy(songUrlDescriptor(trackId(validationSongId)), candidate);
+    if (generation !== authGeneration) throw failure('QMKG_OPERATION_CANCELLED');
+    let nextProfile = {};
+    try { nextProfile = await fetchLoginProfile(candidate); } catch (_) { /* Profile display is optional. */ }
+    if (generation !== authGeneration) throw failure('QMKG_OPERATION_CANCELLED');
+    return serializePersistence(async () => {
+      if (generation !== authGeneration) throw failure('QMKG_OPERATION_CANCELLED');
+      const nextSource = source === 'web' ? 'web' : 'cookie';
+      await saveNativePreference(false);
+      configError = '';
+      if (cookieFile) {
+        let credential;
+        try { credential = await credentialCodec.encode(candidate.cookie); }
+        catch (_) { throw failure('QMKG_COOKIE_STORAGE_FAILED'); }
+        await atomicJson(cookieFile, { version: 1, source: nextSource, credential, profile: nextProfile }, 'QMKG_COOKIE_STORAGE_FAILED');
+      }
+      if (generation !== authGeneration) throw failure('QMKG_OPERATION_CANCELLED');
+      session = candidate;
+      sessionSource = nextSource;
+      profile = nextProfile;
+      nativeSessionEnabled = false;
+      authValidated = true;
+      sessionError = '';
+      checkedAt = clock();
+      rejectedSessions.delete(candidate.fingerprint);
+      return status();
+    });
+  }
+
+  async function clearSession() {
+    const generation = ++authGeneration;
+    session = null;
+    sessionSource = 'none';
+    profile = {};
+    nativeSessionEnabled = false;
+    authValidated = false;
+    sessionError = '';
+    await loadConfig();
+    await loadCredential();
+    session = null;
+    nativeSessionEnabled = false;
+    return serializePersistence(async () => {
+      if (cookieFile) { try { await io.unlink(cookieFile); } catch (error) { if (error.code !== 'ENOENT') throw failure('QMKG_COOKIE_STORAGE_FAILED'); } }
+      await saveNativePreference(false);
+      if (generation === authGeneration) { sessionSource = 'none'; profile = {}; authValidated = false; }
+      return status();
+    });
+  }
+
+  async function fetchLoginProfile(credential) {
+    const url = new URL('https://node.kg.qq.com/cgi/fcgi-bin/fcg_login_info');
+    url.searchParams.set('g_tk_openkey', String(csrfToken(credential.openkey)));
+    const text = await requestText(url, { cookie: credential.cookie }, 4000, true);
+    const match = text.match(/^\s*MusicJsonCallback\(([\s\S]*)\)\s*;?\s*$/);
+    if (!match) return {};
+    let body;
+    try { body = JSON.parse(match[1]); } catch (_) { return {}; }
+    return body && body.code === 0 && (!body.subcode || body.subcode === 0) ? cleanProfile(body.data) : {};
+  }
+
+  async function requestText(url, headers = {}, requestTimeoutMs = timeoutMs, legacyCharset = false) {
     const controller = new AbortController();
     let timer;
     const timedOut = new Promise((_, reject) => {
       timer = setTimeout(() => {
         reject(failure('QMKG_REQUEST_TIMEOUT'));
         controller.abort();
-      }, timeoutMs);
+      }, requestTimeoutMs);
     });
     try {
       return await Promise.race([(async () => {
@@ -315,7 +502,12 @@ function createQmkgClient(options = {}) {
         if (response.status === 401) throw failure('QMKG_SESSION_EXPIRED');
         if (!response.ok) throw failure('QMKG_HTTP_ERROR');
         let text;
-        try { text = await response.text(); }
+        try {
+          if (legacyCharset && typeof response.arrayBuffer === 'function') {
+            const contentType = response.headers && response.headers.get('content-type') || '';
+            text = new TextDecoder(/charset\s*=\s*["']?utf-?8/i.test(contentType) ? 'utf-8' : 'gbk').decode(await response.arrayBuffer());
+          } else text = await response.text();
+        }
         catch (_) { throw failure('QMKG_INVALID_RESPONSE'); }
         if (text.length > 4 * 1024 * 1024) throw failure('QMKG_INVALID_RESPONSE');
         return text;
@@ -392,29 +584,40 @@ function createQmkgClient(options = {}) {
 
   async function getSongUrl(value) {
     const id = trackId(value);
-    if (!session) await refreshSession();
+    await loadConfig();
+    await loadCredential();
+    if (!session && nativeSessionEnabled) await refreshSession();
     if (!session) return unavailable(id, sessionError || 'QMKG_SESSION_MISSING');
-    const descriptor = {
-      ns: 'mini_kg_song', ns_inbuf: 'proto_mini_kg_song', cmd: 'GetSongUrl|96|1',
-      data: { ksong_mid: id },
-      mapExt: { l5api: { modid: 1209409, cmd: 65536 },
-        wnsConfig: { appid: 1000557 }, dcapi: { interfaceId: 114300187 } },
-    };
+    const descriptor = songUrlDescriptor(id);
+    const generation = authGeneration;
     let media;
     for (let attempt = 0; attempt < 2; attempt++) {
       const credential = session;
+      if (!credential || generation !== authGeneration) return unavailable(id, 'QMKG_SESSION_MISSING');
+      const nativeCredential = sessionSource === 'windows-wesing-log';
       try {
         media = await proxy(descriptor, credential);
+        if (generation !== authGeneration) return unavailable(id, 'QMKG_SESSION_MISSING');
         if (session && session.fingerprint === credential.fingerprint) authValidated = true;
         break;
       } catch (error) {
         if (error.code !== 'QMKG_SESSION_EXPIRED') throw error;
+        if (generation !== authGeneration) return unavailable(id, 'QMKG_SESSION_MISSING');
         rejectedSessions.add(credential.fingerprint);
         if (rejectedSessions.size > 32) rejectedSessions.delete(rejectedSessions.values().next().value);
         if (session && session.fingerprint === credential.fingerprint) session = null;
         authValidated = false;
         sessionError = 'QMKG_SESSION_EXPIRED';
-        if (attempt === 0) {
+        if (!nativeCredential) {
+          sessionSource = 'none';
+          profile = {};
+          await serializePersistence(async () => {
+            if (generation !== authGeneration) return;
+            if (cookieFile) { try { await io.unlink(cookieFile); } catch (_) {} }
+          });
+          return unavailable(id, 'QMKG_SESSION_EXPIRED');
+        }
+        if (attempt === 0 && nativeSessionEnabled) {
           await refreshSession();
           if (session && session.fingerprint !== credential.fingerprint) continue;
         }
@@ -448,7 +651,7 @@ function createQmkgClient(options = {}) {
     return { provider: 'qmkg', id, lyric, lrc: lyric, adjustment: Number(body.data && body.data.adjust) || 0 };
   }
 
-  return { getStatus, configure, search, getSongInfo, getSongUrl, getLyric };
+  return { getStatus, configure, search, getSongInfo, getSongUrl, getLyric, importCookie, clearSession };
 }
 
 module.exports = { createQmkgClient };

@@ -227,21 +227,30 @@ function setSearchMode(mode) {
     renderSearchHistory();
   }
 }
+function normalizeQmkgLoginStatus(info) {
+  info = info || {};
+  var status = { provider: 'qmkg', loggedIn: false, playbackKeyReady: false, sessionReady: false, authValidated: false, nickname: '全民 K 歌', userId: '', avatar: '', cacheDir: '', checkedAt: 0 };
+  ['source', 'configured', 'connectionAvailable', 'loggedIn', 'playbackKeyReady', 'sessionReady', 'authValidated', 'reauthRequired', 'checkedAt', 'cacheDir', 'nickname', 'userId', 'avatar', 'error', 'message', 'membershipKnown', 'vipType', 'vipLevel', 'isVip', 'isSvip'].forEach(function (key) {
+    if (Object.prototype.hasOwnProperty.call(info, key)) status[key] = info[key];
+  });
+  return status;
+}
 function renderQmkgConnection() {
   var panel = document.getElementById('qmkg-connection');
   if (!panel) return;
   panel.hidden = searchMode !== 'qmkg';
   var status = qmkgLoginStatus || {};
+  var authBusy = qmkgConnectionBusy || (typeof qmkgWebLoginBusy !== 'undefined' && qmkgWebLoginBusy) || (typeof qmkgCookieBusy !== 'undefined' && qmkgCookieBusy);
   var ready = !!(status.playbackKeyReady || status.sessionReady);
   var label = document.getElementById('qmkg-connection-status');
   var message = document.getElementById('qmkg-connection-message');
   var path = document.getElementById('qmkg-cache-dir');
-  if (label) label.textContent = qmkgConnectionBusy ? '正在检测连接…' : (ready ? (status.authValidated ? '伴奏连接已验证' : '已发现本机登录会话') : (status.checkedAt ? '伴奏连接未就绪' : '尚未检测连接'));
-  if (message) message.textContent = status.message || '搜索无需登录。播放伴奏前，请在 Windows 全民 K 歌客户端登录，然后点击重新检测。';
+  if (label) label.textContent = qmkgConnectionBusy ? '正在检测连接…' : (ready ? (status.authValidated ? '伴奏连接已验证' : (status.source === 'windows-wesing-log' ? '已发现本机登录会话' : '全民 K 歌已登录')) : (status.checkedAt ? '伴奏连接未就绪' : '尚未登录全民 K 歌'));
+  if (message) message.textContent = status.message || '搜索无需登录。播放前可扫码或导入 Cookie，也可检测 Windows 客户端连接。';
   if (path && document.activeElement !== path && path.dataset.edited !== 'true') path.value = status.cacheDir || '';
-  ['qmkg-refresh-btn', 'qmkg-save-btn'].forEach(function (id) {
+  ['qmkg-refresh-btn', 'qmkg-client-refresh-btn', 'qmkg-save-btn'].forEach(function (id) {
     var button = document.getElementById(id);
-    if (button) button.disabled = qmkgConnectionBusy;
+    if (button) button.disabled = authBusy;
   });
   panel.classList.toggle('connected', ready);
   if (typeof renderLoginQmkgConnection === 'function') renderLoginQmkgConnection();
@@ -252,21 +261,23 @@ async function loadQmkgConnectionStatus() {
   try {
     var status = await apiJson('/api/qmkg/status');
     if (requestId !== qmkgStatusRequestSeq) return;
-    qmkgLoginStatus = Object.assign({ provider: 'qmkg' }, status || {});
+    qmkgLoginStatus = normalizeQmkgLoginStatus(status);
   } catch (e) {
     if (requestId !== qmkgStatusRequestSeq) return;
     qmkgLoginStatus = Object.assign({}, qmkgLoginStatus, { message: '暂时无法读取伴奏连接状态，请稍后重新检测。' });
   }
   renderQmkgConnection();
+  return qmkgLoginStatus;
 }
 async function updateQmkgConnection(url, body, inputId) {
   if (qmkgConnectionBusy) return;
+  if (typeof qmkgAuthUiNotice === 'string') qmkgAuthUiNotice = '';
   ++qmkgStatusRequestSeq;
   qmkgConnectionBusy = true;
   renderQmkgConnection();
   try {
     var status = await apiJson(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}), timeoutMs: 15000 });
-    qmkgLoginStatus = Object.assign({ provider: 'qmkg' }, status || {});
+    qmkgLoginStatus = normalizeQmkgLoginStatus(status);
     var path = document.getElementById(inputId || 'qmkg-cache-dir');
     if (path && status && !status.error) {
       delete path.dataset.edited;

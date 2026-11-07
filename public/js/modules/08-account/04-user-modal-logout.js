@@ -1,5 +1,5 @@
 function loggedProviderCount() {
-  return ['netease', 'qq', 'kugou', 'qishui'].filter(function (key) { return hasPlatformLogin(key); }).length;
+  return ['netease', 'qq', 'kugou', 'qishui', 'qmkg'].filter(function (key) { return hasPlatformLogin(key); }).length;
 }
 function updateUserModalUi() {
   activeAccountProvider = firstLoggedProvider();
@@ -15,6 +15,7 @@ function updateUserModalUi() {
   var addQQ = document.getElementById('account-add-qq');
   var addKugou = document.getElementById('account-add-kugou');
   var addQishui = document.getElementById('account-add-qishui');
+  var addQmkg = document.getElementById('account-add-qmkg');
   if (chip) {
     chip.className = 'account-provider-chip ' + activeAccountProvider;
     chip.innerHTML = '<span class="account-source-dot ' + meta.dot + '"></span><span>' + meta.label + '</span>';
@@ -37,6 +38,9 @@ function updateUserModalUi() {
       var qishuiSync = st && st.webSession ? '可同步我的喜欢、歌单并按账号权益播放' : '请使用抖音 App 扫码';
       vipEl.textContent = qishuiMode + '  /  ' + qishuiSync;
       vipEl.style.color = 'rgba(69,214,143,0.78)';
+    } else if (activeAccountProvider === 'qmkg') {
+      vipEl.textContent = qmkgLoginStatusText(st);
+      vipEl.style.color = 'rgba(255,189,131,.82)';
     } else if (activeAccountProvider === 'spotify') {
       var spProduct = st && st.product === 'premium' ? 'Spotify Premium' : (st && st.product ? ('Spotify ' + String(st.product).toUpperCase()) : 'Spotify 方案未知');
       vipEl.textContent = 'ID: ' + ((st && st.userId) || '-') + '  /  ' + spProduct + '  /  可同步歌单和 Liked Songs';
@@ -49,7 +53,7 @@ function updateUserModalUi() {
       vipEl.style.color = qqVipPending ? 'rgba(255,232,174,0.86)' : (hasProviderVip('qq', st) ? 'rgba(0,245,212,0.82)' : 'rgba(0,245,212,0.58)');
     }
   }
-  ['netease', 'qq', 'kugou', 'qishui', 'both'].forEach(function (key) {
+  ['netease', 'qq', 'kugou', 'qishui', 'qmkg', 'both'].forEach(function (key) {
     var btn = document.getElementById('user-provider-' + key);
     if (btn) btn.classList.toggle('active', key === 'both' ? dualAccountMode : (!dualAccountMode && activeAccountProvider === key));
   });
@@ -57,8 +61,9 @@ function updateUserModalUi() {
   if (addQQ) addQQ.textContent = hasPlatformLogin('qq') ? '查看 QQ 音乐' : '补登 QQ 音乐';
   if (addKugou) addKugou.textContent = hasPlatformLogin('kugou') ? '查看酷狗音乐' : '补登酷狗音乐';
   if (addQishui) addQishui.textContent = hasPlatformLogin('qishui') ? '重新登录汽水' : '登录汽水音乐';
+  if (addQmkg) addQmkg.textContent = hasPlatformLogin('qmkg') ? '查看全民 K 歌' : '登录全民 K 歌';
   if (logoutBtn) logoutBtn.textContent =
-    activeAccountProvider === 'qq' ? '退出 QQ 音乐' :
+    activeAccountProvider === 'qmkg' ? '退出全民 K 歌' : activeAccountProvider === 'qq' ? '退出 QQ 音乐' :
     (activeAccountProvider === 'kugou' ? '退出酷狗音乐' :
     (activeAccountProvider === 'qishui' ? '清除汽水登录态' :
     (activeAccountProvider === 'spotify' ? '退出 Spotify' : '退出网易云')));
@@ -78,6 +83,14 @@ function showUserModal() {
 }
 function closeUserModal() { closeGsapModal(document.getElementById('user-modal')); }
 function setActiveAccountProvider(provider) {
+  if (provider === 'qmkg') {
+    if (!hasPlatformLogin(provider)) return openProviderLogin(provider);
+    activeAccountProvider = provider;
+    dualAccountMode = false;
+    renderUserBtn();
+    updateUserModalUi();
+    return;
+  }
   provider = provider === 'qq' ? 'qq' : (provider === 'kugou' ? 'kugou' : (provider === 'qishui' ? 'qishui' : (provider === 'spotify' ? 'spotify' : 'netease')));
   if (!hasPlatformLogin(provider)) {
     openProviderLogin(provider);
@@ -102,6 +115,12 @@ function requestDualLoginMode() {
   enableDualAccountView();
 }
 function openProviderLogin(provider) {
+  if (provider === 'qmkg') {
+    closeUserModal();
+    loginProvider = provider;
+    showLoginModal({ provider: provider });
+    return;
+  }
   provider = provider === 'qq' ? 'qq' : (provider === 'kugou' ? 'kugou' : (provider === 'qishui' ? 'qishui' : (provider === 'spotify' ? 'spotify' : 'netease')));
   closeUserModal();
   loginProvider = provider;
@@ -138,6 +157,10 @@ function armLogoutAllAccountsResetConfirmation() {
 }
 
 function resetAllProviderRendererLoginState() {
+  qmkgLoginStatus = normalizeQmkgLoginStatus(null);
+  qmkgAuthUiNotice = '';
+  qmkgManualCookieOpen = false;
+  if (loginWorkflowVerifiedSession) delete loginWorkflowVerifiedSession.qmkg;
   loginStatus = { loggedIn: false, vipType: 0, vipLevel: 'none', isVip: false, isSvip: false, vipLabel: '无VIP' };
   qqLoginStatus = { provider: 'qq', loggedIn: false, preview: false, nickname: 'QQ 音乐', userId: '', avatar: '', vipType: 0, vipLevel: 'none', isVip: false, isSvip: false };
   kugouLoginStatus = { provider: 'kugou', loggedIn: false, preview: false, nickname: '酷狗音乐', userId: '', avatar: '', vipType: 0, vipLevel: 'none', isVip: false, isSvip: false, playbackKeyReady: false };
@@ -187,7 +210,8 @@ async function logoutAllAccountsAndResetEasterEgg() {
       apiJson('/api/logout'),
       apiJson('/api/qq/logout'),
       apiJson('/api/kugou/logout'),
-      apiJson('/api/qishui/logout')
+      apiJson('/api/qishui/logout'),
+      apiJson('/api/qmkg/logout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
     ]);
     var result = await requestLoginEasterEggReplayReset();
     if (!result || !result.ok || result.unlocked || result.resetComplete === false) {
@@ -222,6 +246,26 @@ async function logoutAllAccountsAndResetEasterEgg() {
 }
 
 async function logoutActiveAccount() {
+  if (activeAccountProvider === 'qmkg') {
+    try {
+      var status = await apiJson('/api/qmkg/logout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      if (status && status.error) throw new Error('QMKG_LOGOUT_FAILED');
+      try {
+        if (window.desktopWindow && typeof window.desktopWindow.clearQmkgMusicLogin === 'function') await window.desktopWindow.clearQmkgMusicLogin();
+      } catch (_) { }
+      qmkgLoginStatus = normalizeQmkgLoginStatus(status);
+      qmkgAuthUiNotice = '';
+      qmkgManualCookieOpen = false;
+      if (loginWorkflowVerifiedSession) delete loginWorkflowVerifiedSession.qmkg;
+      activeAccountProvider = firstLoggedProvider();
+      renderQmkgConnection();
+      renderUserBtn();
+      if (hasAnyPlatformLogin()) updateUserModalUi();
+      else closeUserModal();
+      showToast('已退出全民 K 歌');
+    } catch (error) { showToast('全民 K 歌退出未完成，请重试。'); }
+    return;
+  }
   if (activeAccountProvider === 'qishui') {
     try { await apiJson('/api/qishui/logout'); } catch (e) { }
     try {

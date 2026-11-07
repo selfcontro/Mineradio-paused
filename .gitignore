@@ -23,6 +23,8 @@ win-unpacked/
 .qishui-cookie
 .qmkg-settings.json
 .qmkg-settings.json.tmp-*
+.qmkg-cookie
+.qmkg-cookie.tmp-*
 .qishui-token
 .qishui-oauth.json
 .qishui-qr-identity.json

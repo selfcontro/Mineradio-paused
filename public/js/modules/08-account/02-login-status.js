@@ -521,6 +521,11 @@ function startSpotifyLoginStatusAutoRefresh() {
   }, 45000);
 }
 
+function startQmkgLoginStatusAutoRefresh() {
+  if (qmkgLoginAutoRefreshTimer) clearInterval(qmkgLoginAutoRefreshTimer);
+  qmkgLoginAutoRefreshTimer = setInterval(function () { loadQmkgConnectionStatus(); }, 45000);
+}
+
 function renderUserBtn() {
   var btn = document.getElementById('user-btn');
   if (!btn) return;
