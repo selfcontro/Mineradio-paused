@@ -103,21 +103,21 @@ test('search maps offset to page, normalizes milliseconds and never discovers an
     assert.equal(url.hostname, 'node.kg.qq.com');
     assert.equal(url.searchParams.get('cmd'), 'search.search');
     assert.equal(url.searchParams.get('t_curpage'), '3');
-    assert.equal(url.searchParams.get('t_numperpage'), '5');
+    assert.equal(url.searchParams.get('t_numperpage'), '50');
     assert.equal(url.searchParams.get('t_s_key'), '测试歌曲');
     assert.equal(init.redirect, 'error', 'account headers must not follow HTTP redirects');
     assert(!init.headers.cookie.includes(KEY_A));
-    return { code: 0, data: { 'search.search': { totalnum: 12, v_song: [
+    return { code: 0, data: { 'search.search': { totalnum: 101, v_song: [
       { strKSongMid: 'fixtureMid', strSongName: '测试', strSingerName: '歌手', iPlayinterval: 181, strAlbumMid: 'album01' },
     ] } } };
   });
-  const result = await h.client.search('测试歌曲', { limit: 5, offset: 10 });
+  const result = await h.client.search('测试歌曲', { limit: 5, offset: 100 });
   assert.equal(result.songs[0].duration, 181000);
   assert.equal(result.songs[0].provider, 'qmkg');
   assert.equal(result.songs[0].accompaniment, true);
   assert.equal(result.songs[0].playbackMode, 'accompaniment');
-  assert.equal(result.nextOffset, 11);
-  assert.equal(result.hasMore, true);
+  assert.equal(result.nextOffset, 150);
+  assert.equal(result.hasMore, false);
   assert.deepEqual(h.listings, []);
   assert.deepEqual(h.reads, []);
 });
@@ -141,14 +141,44 @@ test('non-aligned offsets return the correct slice across adjacent upstream page
   const h = harness();
   h.setHandler(({ url }) => {
     const page = Number(url.searchParams.get('t_curpage'));
-    return { code: 0, data: { 'search.search': { totalnum: 6,
-      v_song: [0, 1].map(index => ({ strKSongMid: 'mid' + ((page - 1) * 2 + index) })),
+    return { code: 0, data: { 'search.search': { totalnum: 150,
+      v_song: Array.from({ length: 50 }, (_, index) => ({ strKSongMid: 'mid' + ((page - 1) * 50 + index) })),
     } } };
   });
-  const result = await h.client.search('offset', { limit: 2, offset: 3 });
-  assert.deepEqual(result.songs.map(song => song.id), ['mid3', 'mid4']);
+  const result = await h.client.search('offset', { limit: 2, offset: 99 });
+  assert.deepEqual(result.songs.map(song => song.id), ['mid99', 'mid100']);
   assert.deepEqual(h.calls.map(call => call.url.searchParams.get('t_curpage')), ['2', '3']);
-  assert.equal(result.nextOffset, 5);
+  assert.equal(result.nextOffset, 101);
+});
+
+test('search crosses filtered empty pages and resumes partial pages without repeating songs', async () => {
+  const h = harness();
+  h.setHandler(({ url }) => {
+    const page = Number(url.searchParams.get('t_curpage'));
+    return { code: 0, data: { 'search.search': { totalnum: 151,
+      v_song: page === 2 ? [{ strKSongMid: 'availableA' }, { strKSongMid: 'availableB' }]
+        : page === 4 ? [{ strKSongMid: 'availableC' }] : [],
+    } } };
+  });
+  const first = await h.client.search('sparse', { limit: 1 });
+  assert.deepEqual(first.songs.map(song => song.id), ['availableA']);
+  assert.equal(first.nextOffset, 51);
+  assert.equal(first.hasMore, true);
+  const second = await h.client.search('sparse', { limit: 1, offset: first.nextOffset });
+  assert.deepEqual(second.songs.map(song => song.id), ['availableB']);
+  assert.equal(second.nextOffset, 100);
+  const third = await h.client.search('sparse', { limit: 1, offset: second.nextOffset });
+  assert.deepEqual(third.songs.map(song => song.id), ['availableC']);
+  assert.equal(third.hasMore, false);
+});
+
+test('empty filtered searches have bounded traversal and preserve an advancing cursor', async () => {
+  const h = harness();
+  h.setHandler(() => ({ code: 0, data: { 'search.search': { totalnum: 1000, v_song: [] } } }));
+  const result = await h.client.search('filtered');
+  assert.equal(h.calls.length, 3);
+  assert.equal(result.nextOffset, 150);
+  assert.equal(result.hasMore, true);
 });
 
 test('UTF-16 request logs preserve the HTTP uid exactly and discard unrelated cookies', async () => {

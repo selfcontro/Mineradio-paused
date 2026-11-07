@@ -173,6 +173,7 @@ function runHomeSearch(query, mode) {
   else renderSearchHistory();
 }
 function skipLoginAndFocusSearch() {
+  if (loginProvider === 'qmkg') return openQmkgAccompanimentSearch();
   closeLoginModal();
   setTimeout(function () { runHomeSearch(''); }, 180);
 }

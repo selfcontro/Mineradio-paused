@@ -5,159 +5,176 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-
-const moduleRoot = path.join(__dirname, '..', 'public', 'js', 'modules', '08-account');
-const sources = ['01-login-modal-utils.js', '03-login-modal-flows.js'].map(file => ({
-  file, content: fs.readFileSync(path.join(moduleRoot, file), 'utf8'),
-}));
+const root = path.join(__dirname, '..', 'public', 'js', 'modules');
+const sources = ['01-login-modal-utils.js', '03-login-modal-flows.js'].map(file => fs.readFileSync(path.join(root, '08-account', file), 'utf8'));
+const search = fs.readFileSync(path.join(root, '05-playback', '07-search.js'), 'utf8');
+const normalize = search.slice(search.indexOf('function normalizeQmkgLoginStatus('), search.indexOf('function renderQmkgConnection('));
+const plain = value => JSON.parse(JSON.stringify(value));
+const count = (calls, event) => calls.filter(item => item[0] === event).length;
 
 function panel() {
-  const calls = [];
-  const storage = new Map();
+  const calls = [], storage = new Map();
+  const input = { value: '', focus: () => calls.push(['focus-cookie']) };
+  const status = { textContent: '', className: '' };
   const sandbox = {
     loginProvider: 'netease', activeAccountProvider: 'netease',
     neteaseManualCookieOpen: false, qqManualCookieOpen: false, kugouManualCookieOpen: false,
-    qishuiManualCookieOpen: false,
+    qishuiManualCookieOpen: false, qmkgManualCookieOpen: false,
+    qmkgWebLoginBusy: false, qmkgCookieBusy: false, qmkgAuthUiNotice: '', qmkgConnectionBusy: false, qmkgStatusRequestSeq: 0,
     qmkgLoginStatus: { provider: 'qmkg', loggedIn: false, sessionReady: false, playbackKeyReady: false },
-    qmkgConnectionBusy: false,
+    loginStatus: { loggedIn: false }, qqLoginStatus: { loggedIn: false }, kugouLoginStatus: { loggedIn: false }, qishuiLoginStatus: { loggedIn: false }, spotifyLoginStatus: { loggedIn: false },
     localStorage: { getItem: key => storage.get(key) || null, setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) },
-    document: { getElementById: () => null, querySelector: () => null },
+    document: { getElementById: id => id === 'qq-cookie-input' ? input : id === 'qr-status' ? status : null, querySelector: () => null },
     window: {},
+    setTimeout: callback => { callback(); return 1; },
     showToast: message => calls.push(['toast', message]),
-    hasPlatformLogin: () => false,
     loadQmkgConnectionStatus: async () => { calls.push(['cached-status']); },
-    refreshQmkgConnection: async () => { calls.push(['detect-session']); return { provider: 'qmkg' }; },
-    apiJson: async () => { throw new Error('an accompaniment panel action must not call another account API'); },
+    refreshQmkgConnection: async () => { calls.push(['detect-session']); },
+    apiJson: async () => { throw new Error('unexpected API'); },
   };
   vm.createContext(sandbox);
-  for (const source of sources) vm.runInContext(source.content, sandbox, { filename: source.file });
+  vm.runInContext(normalize + sources.join('\n'), sandbox, { filename: 'qmkg-account-bundle.js' });
   sandbox.updateLoginProviderUi = () => calls.push(['render']);
   sandbox.stopQrPoll = () => calls.push(['stop-poll']);
   sandbox.markLoginNodeConnecting = () => calls.push(['connect-animation']);
-  return { sandbox, calls, storage };
+  sandbox.renderUserBtn = () => calls.push(['render-account']);
+  sandbox.renderQmkgConnection = () => calls.push(['render-connection']);
+  sandbox.closeLoginModal = () => calls.push(['close-modal']);
+  return { sandbox, calls, storage, input, status };
 }
+function verified() { return { provider: 'qmkg', loggedIn: true, sessionReady: true, playbackKeyReady: true, authValidated: true, nickname: '演唱者', source: 'cookie' }; }
 
-function plain(value) { return JSON.parse(JSON.stringify(value)); }
-function events(calls, name) { return calls.filter(call => call[0] === name); }
-
-test('early search initialization can call the hoisted panel renderer before account module state exists', () => {
-  let initializing = true;
-  let domReads = 0;
-  const sandbox = {
-    document: {
-      getElementById() {
-        domReads++;
-        if (initializing) throw new Error('account DOM must not be accessed before account module initialization');
-        return null;
-      },
-    },
-  };
+test('early search initialization does not access account DOM before hoisted state is assigned', () => {
+  let reads = 0;
+  const sandbox = { document: { getElementById: () => { reads++; throw new Error('premature DOM read'); } } };
   vm.createContext(sandbox);
-  // The loader concatenates modules. Function declarations are available while
-  // the earlier search module runs, but account-module var assignments are not.
-  const bundle = 'renderLoginQmkgConnection();\n' + sources.map(source => source.content).join('\n');
-  assert.doesNotThrow(() => vm.runInContext(bundle, sandbox, { filename: 'search-before-account-bundle.js' }));
-  assert.equal(domReads, 0);
-  assert.deepEqual(plain(sandbox.ACCOUNT_PROVIDER_KEYS), ['netease', 'qq', 'kugou', 'qishui']);
-  assert.deepEqual(plain(sandbox.loginWorkflowProviderOrder()), ['netease', 'qq', 'kugou', 'qishui', 'qmkg']);
-  assert.deepEqual(plain(sandbox.loginWorkflowVerifiedSession), {});
-  initializing = false;
-  sandbox.renderLoginQmkgConnection();
-  assert.equal(domReads, 1);
+  assert.doesNotThrow(() => vm.runInContext('renderLoginQmkgConnection();\n' + sources.join('\n'), sandbox));
+  assert.equal(reads, 0);
+  assert.deepEqual(plain(sandbox.ACCOUNT_PROVIDER_KEYS), ['netease', 'qq', 'kugou', 'qishui', 'qmkg']);
 });
 
-test('the connection graph adds accompaniment without changing ordinary account ordering or login modes', () => {
+test('K-song is a sortable and visible account platform with the same QR and Cookie modes', () => {
   const { sandbox, storage } = panel();
-  const ordinary = ['netease', 'qq', 'kugou', 'qishui'];
-  storage.set('mineradio-account-provider-order-v1', JSON.stringify(['qq', 'netease', 'qishui', 'kugou']));
-  assert.deepEqual(plain(sandbox.ACCOUNT_PROVIDER_KEYS), ordinary);
-  assert.deepEqual(plain(sandbox.accountProviderOrder()), ['qq', 'netease', 'qishui', 'kugou']);
-  assert.deepEqual(plain(sandbox.loginWorkflowProviderOrder()), ['qq', 'netease', 'qishui', 'kugou', 'qmkg']);
+  storage.set('mineradio-account-provider-order-v1', JSON.stringify(['qmkg', 'qq', 'netease', 'qishui', 'kugou']));
+  assert.deepEqual(plain(sandbox.loginWorkflowProviderOrder()), ['qmkg', 'qq', 'netease', 'qishui', 'kugou']);
   assert.equal(sandbox.normalizeLoginProviderKey('qmkg'), 'qmkg');
-  assert.equal(sandbox.loginProviderSupportsCookieMode('qmkg'), false);
-  assert.equal(sandbox.loginProviderOfficialModeText('qmkg').title, '客户端');
+  assert.equal(sandbox.normalizeAccountProviderKey('qmkg'), 'qmkg');
+  assert.equal(sandbox.loginProviderSupportsCookieMode('qmkg'), true);
+  assert.equal(sandbox.loginProviderOfficialModeText('qmkg').title, '扫码');
   sandbox.setManualCookieOpenForProvider('qmkg', true);
-  assert.equal(sandbox.isManualCookieOpenForProvider('qmkg'), false);
+  assert.equal(sandbox.isManualCookieOpenForProvider('qmkg'), true);
   assert.equal(sandbox.neteaseManualCookieOpen, false);
-  assert.equal(sandbox.qqManualCookieOpen, false);
+  sandbox.saveAccountProviderVisibleList(['qmkg']);
+  assert.deepEqual(plain(sandbox.accountProviderExternalRenderList()), ['qmkg']);
 });
 
-test('a detected accompaniment connection disappears when its current session expires', () => {
+test('an expired K-song session removes its graph connection even after earlier verification', () => {
   const { sandbox } = panel();
-  const paths = [];
-  const mrPort = { getBoundingClientRect: () => ({ left: 200, top: 50, width: 10, height: 10 }) };
-  const sourcePort = { getBoundingClientRect: () => ({ left: 20, top: 50, width: 10, height: 10 }) };
-  const graph = {
-    clientWidth: 300, clientHeight: 150,
-    getBoundingClientRect: () => ({ left: 0, top: 0 }),
-    querySelector: selector => selector.includes('mr-target') ? mrPort : sourcePort,
-  };
-  const svg = { setAttribute() {}, firstChild: null };
-  sandbox.document.getElementById = id => id === 'login-node-graph' ? graph : id === 'login-workflow-svg' ? svg : null;
-  sandbox.appendWorkflowPath = (target, from, to) => paths.push({ target, from, to });
   sandbox.loginWorkflowVerifiedSession.qmkg = true;
-  sandbox.qmkgLoginStatus = { provider: 'qmkg', sessionReady: true, playbackKeyReady: true };
+  sandbox.qmkgLoginStatus = verified();
   assert.equal(sandbox.hasLoginWorkflowConnection('qmkg'), true);
-  sandbox.renderLoginWorkflowEdges();
-  assert.equal(paths.length, 1);
-  paths.length = 0;
-  sandbox.qmkgLoginStatus = { provider: 'qmkg', sessionReady: false, playbackKeyReady: false, reauthRequired: true };
+  assert.equal(sandbox.hasAnyPlatformLogin(), true);
+  assert.equal(sandbox.firstLoggedProvider(), 'qmkg');
+  sandbox.qmkgLoginStatus = { loggedIn: false, sessionReady: false, playbackKeyReady: false, reauthRequired: true };
   assert.equal(sandbox.hasLoginWorkflowConnection('qmkg'), false);
-  sandbox.renderLoginWorkflowEdges();
-  assert.equal(paths.length, 0);
-  sandbox.markLoginWorkflowConnected('qmkg');
-  assert.equal(sandbox.hasLoginWorkflowConnection('qmkg'), false);
+  assert.equal(sandbox.hasAnyPlatformLogin(), false);
 });
 
-test('selecting the accompaniment node only reads cached status; connecting explicitly detects the client session', async () => {
+test('selection only reads saved status; QR and Cookie connections use their own explicit actions', async () => {
   const { sandbox, calls } = panel();
+  sandbox.openQmkgWebLogin = async () => calls.push(['official-qr']);
   sandbox.selectLoginProviderNode('qmkg');
-  assert.equal(sandbox.loginProvider, 'qmkg');
-  assert.equal(events(calls, 'cached-status').length, 1);
-  assert.equal(events(calls, 'detect-session').length, 0);
-  await sandbox.connectLoginMode('official');
-  assert.equal(events(calls, 'detect-session').length, 1);
-  assert.equal(sandbox.pendingCookieExportProvider, '');
-  assert.equal(sandbox.loginWorkflowVerifiedSession.qmkg, undefined);
-});
-
-test('shared login entry points route accompaniment to client detection and never generate other-platform QR codes', async () => {
-  const { sandbox, calls } = panel();
-  sandbox.loginProvider = 'qmkg';
+  assert.equal(count(calls, 'cached-status'), 1);
+  assert.equal(count(calls, 'official-qr'), 0);
+  sandbox.connectLoginMode('official');
+  assert.equal(count(calls, 'official-qr'), 1);
+  sandbox.connectLoginMode('cookie');
+  assert.equal(sandbox.qmkgManualCookieOpen, true);
+  assert.equal(count(calls, 'official-qr'), 1);
+  assert.equal(count(calls, 'detect-session'), 0);
   await sandbox.refreshQr();
   await sandbox.openProviderWebLogin();
-  assert.equal(events(calls, 'detect-session').length, 2);
-  assert.equal(sandbox.pendingCookieExportProvider, '');
+  assert.equal(count(calls, 'official-qr'), 3);
 });
 
-test('accompaniment refuses Cookie import and export even when shared handlers are invoked directly', async () => {
-  const { sandbox, calls } = panel();
+test('Cookie import posts only to K-song and promotes the account only after remote validation', async () => {
+  const { sandbox, calls, input } = panel();
   sandbox.loginProvider = 'qmkg';
-  sandbox.selectLoginMode('cookie');
-  await sandbox.connectLoginMode('cookie');
+  sandbox.qmkgManualCookieOpen = true;
+  input.value = 'uid=fixture-user; openid=fixture-open; openkey=fixture-key';
+  const requests = [];
+  sandbox.apiJson = async (url, options) => { requests.push({ url, options }); return { ...verified(), cookie: 'must-not-reach-renderer-state', openkey: 'must-not-reach-renderer-state' }; };
   await sandbox.submitQQCookieLogin();
-  sandbox.offerLoginCookieExport('qmkg', { loggedIn: true });
-  assert.equal(events(calls, 'detect-session').length, 0);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url, '/api/qmkg/login/cookie');
+  assert.equal(requests[0].options.method, 'POST');
+  assert.equal(JSON.parse(requests[0].options.body).cookie.includes('fixture-key'), true);
+  assert.equal(input.value, '');
+  assert.equal(sandbox.activeAccountProvider, 'qmkg');
+  assert.equal(sandbox.qmkgLoginStatus.authValidated, true);
+  assert.equal(sandbox.qmkgLoginStatus.cookie, undefined);
+  assert.equal(sandbox.qmkgLoginStatus.openkey, undefined);
+  assert.equal(sandbox.qqLoginStatus.loggedIn, false);
+  assert.equal(sandbox.loginStatus.loggedIn, false);
   assert.equal(sandbox.pendingCookieExportProvider, '');
-  assert.equal(sandbox.loginWorkflowVerifiedSession.qmkg, undefined);
-  assert.equal(sandbox.neteaseManualCookieOpen, false);
-  assert.equal(sandbox.qqManualCookieOpen, false);
-  assert.equal(sandbox.kugouManualCookieOpen, false);
+  assert.equal(count(calls, 'detect-session'), 0);
 });
 
-test('panel settings submit only the cache directory and its search shortcut selects accompaniment', async () => {
+test('failed Cookie import keeps the error visible and does not activate a platform', async () => {
+  const { sandbox, input, status } = panel();
+  sandbox.loginProvider = 'qmkg';
+  input.value = 'fixture-invalid-cookie';
+  sandbox.apiJson = async () => ({ loggedIn: false, authValidated: false, message: 'fixture-invalid-cookie' });
+  await sandbox.submitQQCookieLogin();
+  assert.equal(sandbox.qmkgLoginStatus.loggedIn, false);
+  assert.equal(sandbox.activeAccountProvider, 'netease');
+  assert.equal(input.value, 'fixture-invalid-cookie');
+  assert.match(sandbox.qmkgAuthUiNotice, /未通过验证/);
+  assert.doesNotMatch(status.textContent, /fixture-invalid-cookie/);
+});
+
+test('official login requires both the new bridge result and saved status to pass remote validation', async () => {
   const { sandbox, calls } = panel();
   sandbox.loginProvider = 'qmkg';
+  sandbox.qmkgLoginStatus = verified();
+  let requests = 0;
+  sandbox.window.desktopWindow = { openQmkgMusicLogin: async () => ({ ok: true, authValidated: false }) };
+  sandbox.apiJson = async () => { requests++; return verified(); };
+  await sandbox.openQmkgWebLogin();
+  assert.equal(requests, 0);
+  assert.equal(count(calls, 'close-modal'), 0);
+  assert.match(sandbox.qmkgAuthUiNotice, /未完成/);
+  sandbox.window.desktopWindow.openQmkgMusicLogin = async () => ({ ok: true, authValidated: true });
+  sandbox.apiJson = async url => { assert.equal(url, '/api/qmkg/status'); requests++; return verified(); };
+  await sandbox.openQmkgWebLogin();
+  assert.equal(requests, 1);
+  assert.equal(sandbox.activeAccountProvider, 'qmkg');
+  assert.equal(count(calls, 'close-modal'), 1);
+});
+
+test('logout clears only K-song and cannot route to another account logout', async () => {
+  const { sandbox, calls } = panel();
+  const logoutSource = fs.readFileSync(path.join(root, '08-account', '04-user-modal-logout.js'), 'utf8');
+  vm.runInContext(logoutSource, sandbox);
+  sandbox.activeAccountProvider = 'qmkg';
+  sandbox.qmkgLoginStatus = verified();
+  sandbox.closeUserModal = () => calls.push(['close-user']);
+  sandbox.window.desktopWindow = { clearQmkgMusicLogin: async () => calls.push(['clear-partition']) };
+  sandbox.apiJson = async (url, options) => { calls.push(['logout', url, options.method]); return { provider: 'qmkg', loggedIn: false, sessionReady: false, playbackKeyReady: false, authValidated: false }; };
+  await sandbox.logoutActiveAccount();
+  assert.deepEqual(plain(calls.filter(call => call[0] === 'logout')), [['logout', '/api/qmkg/logout', 'POST']]);
+  assert.equal(sandbox.qmkgLoginStatus.loggedIn, false);
+  assert.equal(count(calls, 'clear-partition'), 1);
+});
+
+test('compatibility settings submit only a directory and search stays in accompaniment mode', async () => {
+  const { sandbox, calls } = panel();
   const cacheInput = { value: '  D:\\WeSingCache  ' };
-  const searchInput = { focus: () => calls.push(['focus-search']) };
-  sandbox.document.getElementById = id => id === 'login-qmkg-cache-dir' ? cacheInput : id === 'search-input' ? searchInput : null;
+  sandbox.document.getElementById = id => id === 'login-qmkg-cache-dir' ? cacheInput : id === 'search-input' ? { focus: () => calls.push(['focus-search']) } : null;
   sandbox.updateQmkgConnection = async (...args) => calls.push(['configure', ...args]);
-  sandbox.setSearchMode = mode => calls.push(['search-mode', mode]);
-  sandbox.setTimeout = callback => { callback(); return 1; };
+  sandbox.setSearchMode = mode => calls.push(['search', mode]);
   await sandbox.saveLoginQmkgCacheDirectory();
-  assert.deepEqual(plain(events(calls, 'configure')[0]), ['configure', '/api/qmkg/config', { cacheDir: 'D:\\WeSingCache' }, 'login-qmkg-cache-dir']);
+  assert.deepEqual(plain(calls.find(call => call[0] === 'configure')), ['configure', '/api/qmkg/config', { cacheDir: 'D:\\WeSingCache' }, 'login-qmkg-cache-dir']);
   sandbox.openQmkgAccompanimentSearch();
-  assert.deepEqual(plain(events(calls, 'search-mode')), [['search-mode', 'qmkg']]);
-  assert.equal(events(calls, 'focus-search').length, 1);
-  assert.equal(events(calls, 'detect-session').length, 0);
+  assert.deepEqual(plain(calls.find(call => call[0] === 'search')), ['search', 'qmkg']);
 });

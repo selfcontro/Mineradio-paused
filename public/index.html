@@ -122,11 +122,12 @@
         <section id="qmkg-connection" class="qmkg-connection" aria-label="全民 K 歌连接" hidden>
           <div class="qmkg-connection-head">
             <span id="qmkg-connection-status" role="status" aria-live="polite">尚未检测连接</span>
-            <button id="qmkg-refresh-btn" type="button" onclick="refreshQmkgConnection()">重新检测</button>
+            <button id="qmkg-refresh-btn" type="button" onclick="showLoginModal({ provider: 'qmkg' })">登录设置</button>
           </div>
-          <p id="qmkg-connection-message">搜索无需登录。播放伴奏前，请在 Windows 全民 K 歌客户端登录，然后点击重新检测。</p>
+          <p id="qmkg-connection-message">搜索无需登录。播放前可扫码或导入 Cookie，也可检测 Windows 客户端连接。</p>
           <details>
-            <summary>客户端缓存目录（可选）</summary>
+            <summary>Windows 客户端兼容设置（可选）</summary>
+            <button id="qmkg-client-refresh-btn" type="button" onclick="refreshQmkgConnection()">检测客户端</button>
             <label for="qmkg-cache-dir">WeSingCache 目录，留空自动查找</label>
             <div class="qmkg-cache-config">
               <input id="qmkg-cache-dir" type="text" placeholder="例如 D:\WeSingCache" spellcheck="false" autocomplete="off" oninput="this.dataset.edited='true'">
@@ -1542,7 +1543,7 @@
             <button id="login-provider-qishui" class="qishui workflow-node" type="button" data-login-provider="qishui" onclick="selectLoginProviderNode('qishui')"><span
                 class="provider-logo">QS</span><b>汽水音乐</b><small>官方扫码 / 抖音确认</small><span class="flow-port out" data-login-provider-output="qishui" title="拖到 MR 接入口"></span></button>
             <button id="login-provider-qmkg" class="qmkg workflow-node" type="button" data-login-provider="qmkg" onclick="selectLoginProviderNode('qmkg')"><span
-                class="provider-logo">K歌</span><b>全民 K 歌</b><small>Windows 客户端 · 伴奏</small><span class="login-provider-state-badge normal">伴奏</span><span class="flow-port out" data-login-provider-output="qmkg" title="拖到 MR 检测客户端连接"></span></button>
+                class="provider-logo">K歌</span><b>全民 K 歌</b><small>官方扫码 / Cookie · 伴奏</small><span class="flow-port out" data-login-provider-output="qmkg" title="拖到 MR 接入口"></span></button>
           </div>
           <div class="login-node-hub workflow-node" data-login-node="mr">
             <span class="flow-port in" data-login-mr-target="mr" title="MR 接入口"></span>
@@ -1562,20 +1563,6 @@
             <div id="login-modal-desc" class="desc">使用 <b>网易云音乐 App</b> 扫码，可同步歌单、红心与播客。</div>
             <div id="qr-status">拖动接口到 MR 接入口后开始登录。</div>
           </div>
-          <section id="login-qmkg-panel" class="login-qmkg-panel" aria-label="全民 K 歌客户端连接" hidden>
-            <div class="login-qmkg-actions">
-              <button id="login-qmkg-refresh-btn" class="modal-btn primary" type="button" onclick="refreshQmkgConnection()">检测连接</button>
-              <button class="modal-btn" type="button" onclick="openQmkgAccompanimentSearch()">搜索伴奏</button>
-            </div>
-            <details>
-              <summary>客户端缓存目录（可选）</summary>
-              <label for="login-qmkg-cache-dir">WeSingCache 目录，留空自动查找</label>
-              <div class="qmkg-cache-config">
-                <input id="login-qmkg-cache-dir" type="text" placeholder="例如 D:\WeSingCache" spellcheck="false" autocomplete="off" oninput="this.dataset.edited='true'">
-                <button id="login-qmkg-save-btn" class="modal-btn" type="button" onclick="saveLoginQmkgCacheDirectory()">保存并检测</button>
-              </div>
-            </details>
-          </section>
           <div class="login-auth-body">
             <div id="qr-shell" class="qr-shell">
               <img id="qr-img" src="" alt="">
@@ -1598,6 +1585,19 @@
               onclick="toggleQQCookiePanel()">手动导入</button>
             <button id="refresh-qr-btn" class="modal-btn primary" onclick="startSelectedLoginConnection()">开始登录</button>
           </div>
+          <details id="login-qmkg-panel" class="login-qmkg-panel" aria-label="Windows 客户端兼容设置" hidden>
+            <summary>Windows 客户端兼容设置（可选）</summary>
+            <p>也可读取本机已登录的全民 K 歌 Windows 客户端连接。</p>
+            <div class="login-qmkg-actions">
+              <button id="login-qmkg-refresh-btn" class="modal-btn" type="button" onclick="refreshQmkgConnection()">检测客户端</button>
+              <button class="modal-btn" type="button" onclick="openQmkgAccompanimentSearch()">搜索伴奏</button>
+            </div>
+            <label for="login-qmkg-cache-dir">WeSingCache 目录，留空自动查找</label>
+            <div class="qmkg-cache-config">
+              <input id="login-qmkg-cache-dir" type="text" placeholder="例如 D:\WeSingCache" spellcheck="false" autocomplete="off" oninput="this.dataset.edited='true'">
+              <button id="login-qmkg-save-btn" class="modal-btn" type="button" onclick="saveLoginQmkgCacheDirectory()">保存并检测</button>
+            </div>
+          </details>
         </div>
       </div>
     </div>
@@ -1662,6 +1662,7 @@
           <button id="user-provider-qq" class="qq" type="button" onclick="setActiveAccountProvider('qq')">QQ 音乐</button>
           <button id="user-provider-kugou" class="kugou" type="button" onclick="setActiveAccountProvider('kugou')">酷狗音乐</button>
           <button id="user-provider-qishui" class="qishui" type="button" onclick="setActiveAccountProvider('qishui')">汽水音乐</button>
+          <button id="user-provider-qmkg" class="qmkg" type="button" onclick="setActiveAccountProvider('qmkg')">全民 K 歌</button>
           <button id="user-provider-both" class="both" type="button" onclick="enableDualAccountView()">我两个都要</button>
         </div>
         <div class="account-modal-actions">
@@ -1669,6 +1670,7 @@
           <button id="account-add-qq" class="modal-btn" onclick="openProviderLogin('qq')">补登 QQ 音乐</button>
           <button id="account-add-kugou" class="modal-btn" onclick="openProviderLogin('kugou')">补登酷狗音乐</button>
           <button id="account-add-qishui" class="modal-btn" onclick="openProviderLogin('qishui')">登录汽水音乐</button>
+          <button id="account-add-qmkg" class="modal-btn" onclick="openProviderLogin('qmkg')">登录全民 K 歌</button>
         </div>
         <div id="account-hint" class="account-hint">QQ 音乐真实登录暂未接入，当前先预览双平台账号交互。</div>
         <div class="btn-row">

@@ -47,6 +47,23 @@ test('accompaniment search stays separate, paginates anonymously and preserves d
   assert.match(calls[1], /&offset=1$/);
 });
 
+test('an empty filtered K-song page can advance to a later available page', async () => {
+  const calls = [];
+  const sandbox = load({
+    qmkgLoginStatus: { loggedIn: false }, MUSIC_SEARCH_MAX_RESULTS: 180,
+    async apiJson(url) {
+      calls.push(url);
+      return calls.length === 1 ? { songs: [], hasMore: true, nextOffset: 150, limit: 18 }
+        : { songs: [song()], hasMore: false, nextOffset: 200, limit: 18 };
+    }
+  }, { search: ['songProviderKey', 'searchProviderStatus', 'searchProviderCanSearch', 'searchModeProvider', 'activeSearchProvidersForMode', 'searchProviderUrl', 'searchProviderPagesHaveMore', 'fetchMusicSearchResults'] });
+  const first = await sandbox.fetchMusicSearchResults('sparse', 'qmkg');
+  assert.equal(first.hasMore, true);
+  const next = await sandbox.fetchMusicSearchResults('sparse', 'qmkg', first.providerPages);
+  assert.match(calls[1], /&offset=150$/);
+  assert.equal(next.songs.length, 1);
+});
+
 test('queue, cover and restore identities preserve accompaniment without persisting playback URLs', () => {
   const sandbox = load({}, { search: ['songProviderKey', 'songSourceTagHtml'], queue: ['queueItemKey', 'playbackRestoreSongSnapshot'], cover: ['songCustomCoverKey'] });
   const item = Object.assign(song(), { resolvedPlaybackProvider: 'netease', url: 'https://secret.invalid/signed', cookie: 'do-not-store' });
@@ -130,7 +147,7 @@ test('ordinary login, artist, comments and cloud actions cannot route K-song IDs
     search: ['songProviderKey'], account: ['platformMeta', 'platformStatus'],
     details: ['songAccountProvider', 'songAccountAdapter', 'songAccountUnsupportedMessage', 'ensureLoggedInForAction', 'openArtistDetailForSong', 'resolveArtistSongForDetail', 'detailCommentsConfig', 'albumDetailUrlForSong', 'toggleLikeSong']
   });
-  assert.equal(sandbox.platformMeta('qmkg').label, '全民 K 歌伴奏');
+  assert.equal(sandbox.platformMeta('qmkg').label, '全民 K 歌');
   assert.equal(sandbox.platformStatus('qmkg').provider, 'qmkg');
   assert.equal(sandbox.songAccountProvider(song()), 'qmkg');
   assert.equal(sandbox.detailCommentsConfig(song()), null);
@@ -151,8 +168,8 @@ test('cached status is read separately from explicit local-session refresh/confi
   const sandbox = load({
     searchMode: 'qmkg', qmkgLoginStatus: {}, qmkgConnectionBusy: false, qmkgStatusRequestSeq: 0,
     document: { getElementById: id => elements[id], activeElement: null },
-    apiJson: async (url, options) => { calls.push({ url, options }); return { provider: 'qmkg', playbackKeyReady: true, authValidated: false, cacheDir: 'D:\\WeSingCache', message: '已发现本机会话' }; }
-  }, { search: ['renderQmkgConnection', 'loadQmkgConnectionStatus', 'updateQmkgConnection', 'refreshQmkgConnection', 'saveQmkgCacheDirectory'] });
+    apiJson: async (url, options) => { calls.push({ url, options }); return { provider: 'qmkg', source: 'windows-wesing-log', playbackKeyReady: true, authValidated: false, cacheDir: 'D:\\WeSingCache', message: '已发现本机会话' }; }
+  }, { search: ['normalizeQmkgLoginStatus', 'renderQmkgConnection', 'loadQmkgConnectionStatus', 'updateQmkgConnection', 'refreshQmkgConnection', 'saveQmkgCacheDirectory'] });
   sandbox.renderQmkgConnection();
   assert.equal(calls.length, 0);
   await sandbox.loadQmkgConnectionStatus();

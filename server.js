@@ -123,6 +123,25 @@ const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
 const qmkgClient = createQmkgClient({
   configFile: process.env.QMKG_CONFIG_FILE || path.join(__dirname, '.qmkg-settings.json'),
+  cookieFile: process.env.QMKG_COOKIE_FILE || path.join(__dirname, '.qmkg-cookie'),
+  credentialCodec: {
+    encode(value) {
+      if (process.versions.electron) {
+        const { safeStorage } = require('electron');
+        if (!safeStorage || !safeStorage.isEncryptionAvailable()) throw new Error('QMKG_COOKIE_STORAGE_FAILED');
+        return { encoding: 'electron-safe-storage', data: safeStorage.encryptString(value).toString('base64') };
+      }
+      return { encoding: 'local', value };
+    },
+    decode(value) {
+      if (value && value.encoding === 'local') return value.value;
+      if (value && value.encoding === 'electron-safe-storage' && process.versions.electron) {
+        const { safeStorage } = require('electron');
+        if (safeStorage && safeStorage.isEncryptionAvailable()) return safeStorage.decryptString(Buffer.from(value.data, 'base64'));
+      }
+      return '';
+    },
+  },
 });
 const LOGIN_EASTER_EGG_GATE_FILE = String(process.env.MINERADIO_LOGIN_EASTER_EGG_GATE_FILE || '');
 const LOGIN_EASTER_EGG_GATE_VERSION = String(process.env.MINERADIO_LOGIN_EASTER_EGG_GATE_VERSION || 'world-peace-v1');
@@ -4659,7 +4678,7 @@ const server = http.createServer(async (req, res) => {
       sendLocalJSON(res, { provider: 'qmkg', error: 'LOCAL_ACCESS_REQUIRED', message: '请在本机播放器中使用全民 K 歌连接。' }, 403);
       return;
     }
-    const mutations = ['/api/qmkg/config', '/api/qmkg/session/refresh'];
+    const mutations = ['/api/qmkg/config', '/api/qmkg/session/refresh', '/api/qmkg/login/cookie', '/api/qmkg/logout'];
     const expectedMethod = mutations.includes(pn) ? 'POST' : 'GET';
     if (req.method !== expectedMethod) {
       sendLocalJSON(res, { provider: 'qmkg', error: 'METHOD_NOT_ALLOWED' }, 405);
@@ -4672,7 +4691,18 @@ const server = http.createServer(async (req, res) => {
       }
     }
     try {
-      if (pn === '/api/qmkg/status') {
+      if (pn === '/api/qmkg/login/cookie') {
+        if (!loginEasterEggGateUnlocked()) {
+          sendLocalJSON(res, { provider: 'qmkg', error: 'LOGIN_EASTER_EGG_LOCKED', message: '请先完成登录彩蛋解锁。' }, 423);
+        } else {
+          const body = await readRequestBody(req);
+          if (typeof body.cookie !== 'string' || body.cookie.length > 32768) {
+            sendLocalJSON(res, { provider: 'qmkg', error: 'QMKG_COOKIE_INVALID', message: '请导入有效的全民 K 歌登录 Cookie。' }, 400);
+          } else sendLocalJSON(res, await qmkgClient.importCookie(body.cookie, { source: 'cookie' }));
+        }
+      } else if (pn === '/api/qmkg/logout') {
+        sendLocalJSON(res, await qmkgClient.clearSession());
+      } else if (pn === '/api/qmkg/status') {
         sendLocalJSON(res, await qmkgClient.getStatus());
       } else if (pn === '/api/qmkg/session/refresh') {
         sendLocalJSON(res, await qmkgClient.getStatus({ refresh: true }));
@@ -4705,11 +4735,11 @@ const server = http.createServer(async (req, res) => {
     } catch (err) {
       // Never serialize upstream response bodies, request URLs, or session values.
       const code = /^QMKG_[A-Z_]+$/.test(String(err && err.code || '')) ? err.code : 'QMKG_REQUEST_FAILED';
-      const needsLogin = /SESSION|LOGIN|AUTH/.test(code);
+      const needsLogin = /SESSION|LOGIN|AUTH|COOKIE_INVALID/.test(code);
       sendLocalJSON(res, {
         provider: 'qmkg', playable: false, error: code, reauthRequired: needsLogin,
         message: needsLogin
-          ? '请在 Windows 全民 K 歌客户端登录后，回到这里重新检测。'
+          ? '请重新扫码登录全民 K 歌，或导入完整有效的 Cookie。'
           : '全民 K 歌暂时无法完成请求，请稍后重试或检查缓存目录。',
       }, needsLogin ? 401 : (/INVALID_|CONFIG/.test(code) ? 400 : 502));
     }
@@ -6797,5 +6827,7 @@ server.listen(PORT, HOST, () => {
 });
 
 server.clearAllLoginCredentials = clearAllRuntimeLoginCredentials;
+server.importQmkgCookie = (cookie, options) => qmkgClient.importCookie(cookie, options);
+server.clearQmkgSession = () => qmkgClient.clearSession();
 
 module.exports = server;
