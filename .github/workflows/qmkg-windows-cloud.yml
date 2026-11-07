@@ -14,9 +14,6 @@ jobs:
     timeout-minutes: 25
     env:
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-      ELECTRON_BUILDER_CACHE: '${{ runner.temp }}\electron-builder-cache'
-      QMKG_INSTALLED_EXE: '${{ runner.temp }}\qmkg-install\Mineradio\Mineradio.exe'
-      PLAYWRIGHT_NODE_DIR: '${{ runner.temp }}\qmkg-test-tools\node_modules\playwright'
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
@@ -25,6 +22,12 @@ jobs:
         with:
           node-version: '24'
           package-manager-cache: false
+      - name: Configure disposable runner paths
+        shell: pwsh
+        run: |
+          "ELECTRON_BUILDER_CACHE=$env:RUNNER_TEMP\electron-builder-cache" >> $env:GITHUB_ENV
+          "QMKG_INSTALLED_EXE=$env:RUNNER_TEMP\qmkg-install\Mineradio\Mineradio.exe" >> $env:GITHUB_ENV
+          "PLAYWRIGHT_NODE_DIR=$env:RUNNER_TEMP\qmkg-test-tools\node_modules\playwright" >> $env:GITHUB_ENV
       - name: Install locked dependencies without restoring account or app caches
         run: npm ci --no-audit --no-fund
       - name: Run accompaniment and account regression tests
