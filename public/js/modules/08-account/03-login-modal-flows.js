@@ -1,7 +1,7 @@
 var loginRefreshRequestSeq = 0;
 var loginWorkflowDrag = null;
 var LOGIN_WORKFLOW_CONNECTION_STORE_KEY = 'mineradio-login-workflow-connections-v1';
-var LOGIN_WORKFLOW_PROVIDERS = ['netease', 'qq', 'kugou', 'qishui'];
+var LOGIN_WORKFLOW_PROVIDERS = ['netease', 'qq', 'kugou', 'qishui', 'qmkg'];
 var loginWorkflowPendingProvider = '';
 var loginWorkflowVerifiedSession = {};
 var loginProviderPointer = null;
@@ -20,14 +20,16 @@ function isLoginRefreshCurrent(provider, seq) {
 }
 
 function normalizeLoginProviderKey(provider) {
+  if (provider === 'qmkg') return 'qmkg';
   return provider === 'qq' ? 'qq' : (provider === 'kugou' ? 'kugou' : (provider === 'qishui' ? 'qishui' : 'netease'));
 }
 function loginProviderSupportsCookieMode(provider) {
   provider = normalizeLoginProviderKey(provider);
-  return provider !== 'spotify' && provider !== 'qishui';
+  return provider !== 'spotify' && provider !== 'qishui' && provider !== 'qmkg';
 }
 function loginProviderOfficialModeText(provider) {
   provider = normalizeLoginProviderKey(provider);
+  if (provider === 'qmkg') return { title: '客户端', sub: '检测 Windows 客户端连接' };
   if (provider === 'spotify') return { title: 'OAuth', sub: '弹出 Spotify 授权窗口' };
   if (provider === 'qishui') return { title: '扫码', sub: '使用抖音 App 官方授权' };
   if (provider === 'kugou') return { title: '官网', sub: '弹出酷狗官方窗口' };
@@ -57,6 +59,7 @@ function saveLoginWorkflowConnections(list) {
 }
 function providerHasLiveLogin(provider) {
   provider = normalizeLoginProviderKey(provider);
+  if (provider === 'qmkg') return !!(qmkgLoginStatus && (qmkgLoginStatus.sessionReady || qmkgLoginStatus.playbackKeyReady));
   if (loginWorkflowVerifiedSession && loginWorkflowVerifiedSession[provider]) return true;
   try { return typeof hasPlatformLogin === 'function' && hasPlatformLogin(provider); } catch (e) { return false; }
 }
@@ -64,7 +67,7 @@ function loginWorkflowConnectedProviders() {
   return loginWorkflowProviderOrder().filter(providerHasLiveLogin);
 }
 function loginWorkflowProviderOrder() {
-  try { return accountProviderOrder(); } catch (e) { return LOGIN_WORKFLOW_PROVIDERS.slice(); }
+  try { return accountProviderOrder().filter(function (provider) { return provider !== 'qmkg'; }).concat('qmkg'); } catch (e) { return LOGIN_WORKFLOW_PROVIDERS.slice(); }
 }
 function syncLoginWorkflowConnectionsFromStatus() {
   saveLoginWorkflowConnections([]);
@@ -76,6 +79,7 @@ function hasLoginWorkflowConnection(provider) {
 }
 function markLoginWorkflowConnected(provider) {
   provider = normalizeLoginProviderKey(provider);
+  if (provider === 'qmkg') return;
   loginWorkflowVerifiedSession[provider] = true;
   if (!isAccountProviderExternallyVisible(provider)) {
     var list = accountProviderVisibleList();
@@ -198,8 +202,9 @@ function selectLoginProviderNode(provider) {
   }
   provider = normalizeLoginProviderKey(provider);
   setLoginProvider(provider, true);
-  setLoginAuthDrawerOpen(hasLoginWorkflowConnection(provider) || loginWorkflowPendingProvider === provider);
+  setLoginAuthDrawerOpen(provider === 'qmkg' || hasLoginWorkflowConnection(provider) || loginWorkflowPendingProvider === provider);
   updateLoginProviderUi();
+  if (provider === 'qmkg') loadQmkgConnectionStatus();
 }
 function connectLoginProviderToMr(provider) {
   provider = normalizeLoginProviderKey(provider);
@@ -233,7 +238,7 @@ function finishLoginWorkflowDrag(e) {
 function beforeLoginProviderForPointer(y) {
   var parent = document.getElementById('login-platform-tabs');
   if (!parent) return '';
-  var nodes = Array.prototype.slice.call(parent.querySelectorAll('[data-login-provider]'));
+  var nodes = Array.prototype.slice.call(parent.querySelectorAll('[data-login-provider]:not([data-login-provider="qmkg"])'));
   for (var i = 0; i < nodes.length; i += 1) {
     var rect = nodes[i].getBoundingClientRect();
     if (y < rect.top + rect.height / 2) return nodes[i].getAttribute('data-login-provider') || '';
@@ -299,6 +304,13 @@ function handleLoginProviderExternalSwitchEvent(e, provider) {
 function updateLoginProviderCapsuleStatus(provider, btn) {
   var st = platformStatus(provider) || {};
   var meta = platformMeta(provider);
+  if (provider === 'qmkg') {
+    var accompanimentBadge = btn.querySelector('.login-provider-state-badge');
+    var ready = providerHasLiveLogin(provider);
+    if (accompanimentBadge) accompanimentBadge.textContent = qmkgConnectionBusy ? '检测中' : (ready ? '已连接' : '伴奏');
+    btn.setAttribute('title', st.message || '连接 Windows 全民 K 歌客户端，播放伴奏与同步歌词');
+    return;
+  }
   var handle = btn.querySelector('.login-provider-sort-handle');
   if (!handle) {
     handle = document.createElement('span');
@@ -447,7 +459,7 @@ function updateLoginNodeGraphUi() {
     if (!btn) return;
     updateLoginProviderCapsuleStatus(provider, btn);
     btn.classList.toggle('active', provider === loginProvider);
-    btn.classList.toggle('external-on', isAccountProviderExternallyVisible(provider));
+    btn.classList.toggle('external-on', provider !== 'qmkg' && isAccountProviderExternallyVisible(provider));
     btn.classList.toggle('connected', connected.indexOf(provider) >= 0);
     btn.classList.toggle('pending', loginWorkflowPendingProvider === provider && connected.indexOf(provider) < 0);
   });
@@ -455,14 +467,17 @@ function updateLoginNodeGraphUi() {
   var cookie = document.getElementById('login-mode-cookie');
   var officialText = loginProviderOfficialModeText(loginProvider);
   if (official) {
+    var officialMark = official.querySelector('.provider-logo');
     var title = official.querySelector('b');
     var sub = official.querySelector('small');
+    if (officialMark) officialMark.textContent = loginProvider === 'qmkg' ? 'PC' : 'QR';
     if (title) title.textContent = officialText.title;
     if (sub) sub.textContent = officialText.sub;
     official.disabled = false;
     official.classList.toggle('active', !isManualCookieOpenForProvider(loginProvider));
   }
   if (cookie) {
+    cookie.hidden = loginProvider === 'qmkg';
     var cookieTitle = cookie.querySelector('b');
     var cookieSub = cookie.querySelector('small');
     if (cookieTitle) cookieTitle.textContent = 'Cookie';
@@ -488,12 +503,12 @@ function connectLoginProvider(provider) {
 }
 function selectLoginMode(mode) {
   if (mode === 'cookie' && !loginProviderSupportsCookieMode(loginProvider)) {
-    showToast(loginProvider === 'qishui' ? '汽水音乐仅使用官方扫码登录' : 'Spotify 使用官方 OAuth 登录');
+    showToast(loginProvider === 'qmkg' ? '全民 K 歌使用 Windows 客户端连接' : (loginProvider === 'qishui' ? '汽水音乐仅使用官方扫码登录' : 'Spotify 使用官方 OAuth 登录'));
     return;
   }
   setManualCookieOpenForProvider(loginProvider, mode === 'cookie');
   updateLoginProviderUi();
-  setLoginAuthDrawerOpen(hasLoginWorkflowConnection(loginProvider) || loginWorkflowPendingProvider === loginProvider);
+  setLoginAuthDrawerOpen(loginProvider === 'qmkg' || hasLoginWorkflowConnection(loginProvider) || loginWorkflowPendingProvider === loginProvider);
 }
 function startSelectedLoginConnection() {
   if (!hasLoginWorkflowConnection(loginProvider) && loginWorkflowPendingProvider !== loginProvider) {
@@ -504,6 +519,11 @@ function startSelectedLoginConnection() {
   connectLoginMode(loginWorkflowActiveMode());
 }
 function connectLoginMode(mode) {
+  if (loginProvider === 'qmkg') {
+    setLoginAuthDrawerOpen(true);
+    if (mode === 'cookie') { showToast('全民 K 歌使用 Windows 客户端连接'); return; }
+    return refreshQmkgConnection();
+  }
   setLoginAuthDrawerOpen(true);
   markLoginNodeConnecting();
   if (loginProvider === 'spotify') {
@@ -536,6 +556,7 @@ function providerCookieExportLabel(provider) {
 }
 function offerLoginCookieExport(provider, info) {
   provider = normalizeLoginProviderKey(provider);
+  if (provider === 'qmkg') return;
   if (!hasPlatformLogin(provider) && !(info && info.loggedIn)) return;
   markLoginWorkflowConnected(provider);
   updateLoginNodeGraphUi();
@@ -588,9 +609,10 @@ async function showLoginModal(opts) {
 }
 function resumeLoginModalAfterGate() {
   bindLoginWorkflowPointerEvents();
-  setLoginAuthDrawerOpen(false);
+  setLoginAuthDrawerOpen(loginProvider === 'qmkg');
   updateLoginProviderUi();
   scheduleLoginWorkflowEdges('open');
+  loadQmkgConnectionStatus();
 }
 function closeLoginModal() {
   stopQrPoll();
@@ -600,8 +622,12 @@ function closeLoginModal() {
 function setLoginProvider(provider, silent) {
   loginProvider = normalizeLoginProviderKey(provider);
   loginRefreshRequestSeq += 1;
+  if (loginProvider === 'qmkg') stopQrPoll();
   updateLoginProviderUi();
-  if (!silent && document.getElementById('login-modal').classList.contains('show')) refreshQr();
+  if (!silent && document.getElementById('login-modal').classList.contains('show')) {
+    if (loginProvider === 'qmkg') loadQmkgConnectionStatus();
+    else refreshQr();
+  }
 }
 function qishuiPublicSearchReady() {
   return !!(qishuiLoginStatus && (qishuiLoginStatus.searchReady || qishuiLoginStatus.publicCatalog));
@@ -886,7 +912,61 @@ function openQishuiPublicSearch() {
   }
   showToast('汽水搜索已切换为匹配源');
 }
+function renderLoginQmkgConnection() {
+  // Search UI initializes earlier in the concatenated module bundle.
+  if (!Array.isArray(LOGIN_WORKFLOW_PROVIDERS) || !Array.isArray(ACCOUNT_PROVIDER_KEYS)) return;
+  var panel = document.getElementById('login-qmkg-panel');
+  if (!panel) return;
+  var selected = loginProvider === 'qmkg';
+  panel.hidden = !selected;
+  if (selected) {
+    var status = qmkgLoginStatus || {};
+    var ready = providerHasLiveLogin('qmkg');
+    var statusEl = document.getElementById('qr-status');
+    if (statusEl) {
+      statusEl.textContent = qmkgConnectionBusy ? '正在检测客户端连接…' : (status.message || '先在 Windows 全民 K 歌客户端登录并加载歌曲，再检测连接。');
+      statusEl.className = ready ? 'scan' : (status.checkedAt ? 'fail' : 'preview');
+    }
+    var pathInput = document.getElementById('login-qmkg-cache-dir');
+    if (pathInput && document.activeElement !== pathInput && pathInput.dataset.edited !== 'true') pathInput.value = status.cacheDir || '';
+    var refreshBtn = document.getElementById('login-qmkg-refresh-btn');
+    if (refreshBtn) {
+      refreshBtn.disabled = qmkgConnectionBusy;
+      refreshBtn.textContent = qmkgConnectionBusy ? '检测中…' : (status.checkedAt ? '重新检测' : '检测连接');
+    }
+    var saveBtn = document.getElementById('login-qmkg-save-btn');
+    if (saveBtn) saveBtn.disabled = qmkgConnectionBusy;
+  }
+  updateLoginNodeGraphUi();
+}
+function saveLoginQmkgCacheDirectory() {
+  var input = document.getElementById('login-qmkg-cache-dir');
+  return updateQmkgConnection('/api/qmkg/config', { cacheDir: String(input && input.value || '').trim() }, 'login-qmkg-cache-dir');
+}
+function openQmkgAccompanimentSearch() {
+  closeLoginModal();
+  setSearchMode('qmkg');
+  setTimeout(function () {
+    var input = document.getElementById('search-input');
+    if (input) input.focus();
+  }, 380);
+}
 function updateLoginProviderUi() {
+  var qmkgDrawer = document.getElementById('login-auth-drawer');
+  if (qmkgDrawer) qmkgDrawer.classList.toggle('qmkg-mode', loginProvider === 'qmkg');
+  var qmkgPanel = document.getElementById('login-qmkg-panel');
+  if (qmkgPanel) qmkgPanel.hidden = loginProvider !== 'qmkg';
+  if (loginProvider === 'qmkg') {
+    if (qmkgDrawer) qmkgDrawer.classList.remove('spotify-mode');
+    var qmkgModal = document.querySelector('#login-modal .dual-login-modal');
+    if (qmkgModal) qmkgModal.classList.remove('spotify-setup-open');
+    var qmkgTitle = document.getElementById('login-modal-title');
+    var qmkgDesc = document.getElementById('login-modal-desc');
+    if (qmkgTitle) qmkgTitle.textContent = '连接全民 K 歌';
+    if (qmkgDesc) qmkgDesc.textContent = '先在 Windows 全民 K 歌客户端登录，再检测连接。支持伴奏播放和同步歌词，退出账号请在官方客户端完成。';
+    renderLoginQmkgConnection();
+    return;
+  }
   var meta = platformMeta(loginProvider);
   var isQQ = loginProvider === 'qq';
   var isKugou = loginProvider === 'kugou';
@@ -1046,6 +1126,7 @@ function updateLoginProviderUi() {
   updateLoginNodeGraphUi();
 }
 async function refreshQr() {
+  if (loginProvider === 'qmkg') return refreshQmkgConnection();
   stopQrPoll();
   updateLoginProviderUi();
   var refreshProvider = loginProvider;
@@ -1257,11 +1338,12 @@ async function pollQishuiQr(generation) {
   }
 }
 function toggleQQCookiePanel() {
-  if (loginProvider === 'spotify') return;
+  if (loginProvider === 'spotify' || loginProvider === 'qmkg') return;
   setManualCookieOpenForProvider(loginProvider, !isManualCookieOpenForProvider(loginProvider));
   updateLoginProviderUi();
 }
 function openProviderWebLogin() {
+  if (loginProvider === 'qmkg') return refreshQmkgConnection();
   if (loginProvider === 'qq') return openQQWebLogin();
   if (loginProvider === 'kugou') return openKugouWebLogin();
   if (loginProvider === 'qishui') return openQishuiWebLogin();
@@ -1480,6 +1562,7 @@ async function openQishuiWebLogin() {
   return refreshQr();
 }
 async function submitQQCookieLogin() {
+  if (loginProvider === 'qmkg') { showToast('全民 K 歌使用 Windows 客户端连接'); return; }
   if (loginProvider === 'spotify') return submitSpotifyConfigLogin();
   if (loginProvider === 'qishui') return openQishuiWebLogin();
   if (loginProvider === 'netease') return submitNeteaseCookieLogin();

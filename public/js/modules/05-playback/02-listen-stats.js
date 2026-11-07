@@ -81,6 +81,7 @@ function listenReportProvider(snapshot) {
 function reportListenSession(record, session, durationMs) {
   if (typeof fetch !== 'function' || !record || !session) return;
   var snapshot = session.song || {};
+  if (listenReportProvider(snapshot) === 'qmkg') return;
   var payload = {
     sessionId: session.sessionId || '',
     provider: listenReportProvider(snapshot),
@@ -163,6 +164,9 @@ function listenSongSnapshot(song) {
   return {
     key: queueItemKey(song),
     id: song.id || '',
+    ksongMid: song.ksongMid || '',
+    playbackMode: song.playbackMode || '',
+    accompaniment: song.accompaniment === true,
     mid: song.mid || song.songmid || '',
     mediaMid: song.mediaMid || song.media_mid || '',
     hash: song.hash || song.fileHash || song.audioHash || '',
@@ -237,6 +241,10 @@ function finalizeListenSession(completed) {
     sessionId: session.sessionId || '',
     key: session.key,
     id: snap.id || '',
+    ksongMid: snap.ksongMid || '',
+    playbackMode: snap.playbackMode || '',
+    accompaniment: snap.accompaniment === true,
+    duration: snap.duration || 0,
     mid: snap.mid || '',
     mediaMid: snap.mediaMid || '',
     hash: snap.hash || '',

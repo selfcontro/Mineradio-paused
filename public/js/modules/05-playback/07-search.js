@@ -5,7 +5,9 @@ var searchLastResultQuery = '';
 var searchProviderNotice = '';
 var SEARCH_HISTORY_STORE_KEY = 'mineradio-search-history';
 var SEARCH_HISTORY_STORE_VERSION = 3;
-var SEARCH_HISTORY_MODES = ['song', 'netease', 'qq', 'kugou', 'qishui', 'podcast'];
+var SEARCH_HISTORY_MODES = ['song', 'netease', 'qq', 'kugou', 'qishui', 'qmkg', 'podcast'];
+var qmkgConnectionBusy = false;
+var qmkgStatusRequestSeq = 0;
 var MUSIC_SEARCH_INITIAL_VISIBLE = 18;
 var MUSIC_SEARCH_APPEND_BATCH = 14;
 var MUSIC_SEARCH_MAX_RESULTS = 180;
@@ -166,6 +168,7 @@ function updateSearchModeTabs() {
   var qqBtn = document.getElementById('search-mode-qq');
   var kugouBtn = document.getElementById('search-mode-kugou');
   var qishuiBtn = document.getElementById('search-mode-qishui');
+  var qmkgBtn = document.getElementById('search-mode-qmkg');
   var podcastBtn = document.getElementById('search-mode-podcast');
   if (songBtn) {
     songBtn.classList.toggle('active', searchMode === 'song');
@@ -191,19 +194,26 @@ function updateSearchModeTabs() {
     podcastBtn.classList.toggle('active', searchMode === 'podcast');
     podcastBtn.setAttribute('aria-selected', searchMode === 'podcast' ? 'true' : 'false');
   }
+  if (qmkgBtn) {
+    qmkgBtn.classList.toggle('active', searchMode === 'qmkg');
+    qmkgBtn.setAttribute('aria-selected', searchMode === 'qmkg' ? 'true' : 'false');
+  }
   if ($input) {
     $input.placeholder = searchMode === 'podcast'
       ? '搜索播客、电台...'
       : (searchMode === 'kugou' ? '搜索酷狗音乐...' : (searchMode === 'qq' ? '搜索 QQ 音乐...' : (searchMode === 'netease' ? '搜索网易云音乐...' : '搜索歌曲、歌手...')));
   }
   if ($input && searchMode === 'qishui') $input.placeholder = '搜索汽水音乐匹配源...';
+  if ($input && searchMode === 'qmkg') $input.placeholder = '搜索全民 K 歌纯伴奏...';
+  renderQmkgConnection();
   requestAnimationFrame(updateSearchPillGlassDisplacementMap);
 }
 function setSearchMode(mode) {
-  mode = (mode === 'podcast' || mode === 'netease' || mode === 'qq' || mode === 'kugou' || mode === 'qishui') ? mode : 'song';
+  mode = (mode === 'podcast' || mode === 'netease' || mode === 'qq' || mode === 'kugou' || mode === 'qishui' || mode === 'qmkg') ? mode : 'song';
   if (searchMode === mode) return;
   searchMode = mode;
   updateSearchModeTabs();
+  if (mode === 'qmkg') loadQmkgConnectionStatus();
   clearSearchResults();
   var searchArea = document.getElementById('search-area');
   if (searchArea) setPeek(searchArea, true, 'search');
@@ -216,6 +226,65 @@ function setSearchMode(mode) {
   } else {
     renderSearchHistory();
   }
+}
+function renderQmkgConnection() {
+  var panel = document.getElementById('qmkg-connection');
+  if (!panel) return;
+  panel.hidden = searchMode !== 'qmkg';
+  var status = qmkgLoginStatus || {};
+  var ready = !!(status.playbackKeyReady || status.sessionReady);
+  var label = document.getElementById('qmkg-connection-status');
+  var message = document.getElementById('qmkg-connection-message');
+  var path = document.getElementById('qmkg-cache-dir');
+  if (label) label.textContent = qmkgConnectionBusy ? '正在检测连接…' : (ready ? (status.authValidated ? '伴奏连接已验证' : '已发现本机登录会话') : (status.checkedAt ? '伴奏连接未就绪' : '尚未检测连接'));
+  if (message) message.textContent = status.message || '搜索无需登录。播放伴奏前，请在 Windows 全民 K 歌客户端登录，然后点击重新检测。';
+  if (path && document.activeElement !== path && path.dataset.edited !== 'true') path.value = status.cacheDir || '';
+  ['qmkg-refresh-btn', 'qmkg-save-btn'].forEach(function (id) {
+    var button = document.getElementById(id);
+    if (button) button.disabled = qmkgConnectionBusy;
+  });
+  panel.classList.toggle('connected', ready);
+  if (typeof renderLoginQmkgConnection === 'function') renderLoginQmkgConnection();
+}
+async function loadQmkgConnectionStatus() {
+  if (qmkgConnectionBusy) return;
+  var requestId = ++qmkgStatusRequestSeq;
+  try {
+    var status = await apiJson('/api/qmkg/status');
+    if (requestId !== qmkgStatusRequestSeq) return;
+    qmkgLoginStatus = Object.assign({ provider: 'qmkg' }, status || {});
+  } catch (e) {
+    if (requestId !== qmkgStatusRequestSeq) return;
+    qmkgLoginStatus = Object.assign({}, qmkgLoginStatus, { message: '暂时无法读取伴奏连接状态，请稍后重新检测。' });
+  }
+  renderQmkgConnection();
+}
+async function updateQmkgConnection(url, body, inputId) {
+  if (qmkgConnectionBusy) return;
+  ++qmkgStatusRequestSeq;
+  qmkgConnectionBusy = true;
+  renderQmkgConnection();
+  try {
+    var status = await apiJson(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}), timeoutMs: 15000 });
+    qmkgLoginStatus = Object.assign({ provider: 'qmkg' }, status || {});
+    var path = document.getElementById(inputId || 'qmkg-cache-dir');
+    if (path && status && !status.error) {
+      delete path.dataset.edited;
+      path.value = qmkgLoginStatus.cacheDir || '';
+    }
+  } catch (e) {
+    qmkgLoginStatus = Object.assign({}, qmkgLoginStatus, { message: '连接检测失败，请确认服务已启动后重试。' });
+  } finally {
+    qmkgConnectionBusy = false;
+    renderQmkgConnection();
+  }
+}
+function refreshQmkgConnection() {
+  return updateQmkgConnection('/api/qmkg/session/refresh', {});
+}
+function saveQmkgCacheDirectory() {
+  var input = document.getElementById('qmkg-cache-dir');
+  return updateQmkgConnection('/api/qmkg/config', { cacheDir: String(input && input.value || '').trim() });
 }
 function podcastMetaText(item) {
   item = item || {};
@@ -437,6 +506,7 @@ document.addEventListener('click', function (e) {
 updateSearchModeTabs();
 
 function songProviderKey(song) {
+  if (song && (song.provider === 'qmkg' || song.source === 'qmkg' || song.type === 'qmkg')) return 'qmkg';
   if (song && (song.provider === 'spotify' || song.source === 'spotify' || song.type === 'spotify' || song.spotifyId || song.spotifyUri)) return 'spotify';
   if (song && (song.provider === 'qq' || song.source === 'qq' || song.type === 'qq')) return 'qq';
   if (song && (song.provider === 'qishui' || song.source === 'qishui' || song.type === 'qishui')) return 'qishui';
@@ -446,8 +516,9 @@ function songProviderKey(song) {
 function songSourceTagHtml(song, opts) {
   opts = opts || {};
   var rawKey = song && (song.resolvedPlaybackProvider || song.playbackProvider || song.audioProvider || song.providerResolved || '');
-  var key = /^(netease|qq|kugou|qishui|spotify)$/.test(String(rawKey || '')) ? String(rawKey) : songProviderKey(song);
+  var key = songProviderKey(song) === 'qmkg' ? 'qmkg' : (/^(netease|qq|kugou|qishui|spotify)$/.test(String(rawKey || '')) ? String(rawKey) : songProviderKey(song));
   var label = key === 'qq' ? 'QQ' : (key === 'kugou' ? 'KG' : (key === 'qishui' ? 'QS' : (key === 'spotify' ? 'SP' : 'NE')));
+  if (key === 'qmkg') return '<span class="tag-source qmkg" title="全民 K 歌纯伴奏">伴奏</span>';
   if (opts.switcher) {
     return '<button type="button" class="tag-source ' + key + ' control-source-chip" title="切换音源" aria-haspopup="true" onclick="toggleControlSourceSwitcher(event)">' + label + '</button>';
   }
@@ -464,6 +535,7 @@ function controlSourceProviders() {
   ];
 }
 function controlSourceProviderTitle(provider) {
+  if (provider === 'qmkg') return '全民 K 歌伴奏';
   var item = controlSourceProviders().filter(function (p) { return p.key === provider; })[0];
   return item ? item.title : provider;
 }
@@ -548,6 +620,7 @@ function renderControlSourceSwitcher(matches) {
   controlSourcePositionSwitcher();
 }
 async function findControlSourceMatchResult(song, provider) {
+  if (songProviderKey(song) === 'qmkg' || provider === 'qmkg') return { song: null, issue: 'accompaniment_only' };
   var query = controlSourceSwitchQuery(song);
   if (!query) return { song: null, issue: 'no_source' };
   var data = await apiJson(controlSourceSearchUrl(provider, query), { timeoutMs: 6000 });
@@ -603,6 +676,10 @@ function toggleControlSourceSwitcher(e) {
     e.stopPropagation();
   }
   var song = currentControlSong();
+  if (songProviderKey(song) === 'qmkg') {
+    showToast('全民 K 歌伴奏不支持切换为歌曲音源');
+    return;
+  }
   if (!song || song.type === 'local' || song.source === 'local' || song.localUrl || song.type === 'podcast') {
     showToast('当前歌曲不支持切换音源');
     return;
@@ -628,6 +705,10 @@ async function switchCurrentSongSource(provider) {
   var song = currentControlSong();
   if (!song) return;
   var currentProvider = songProviderKey(song);
+  if (currentProvider === 'qmkg' || provider === 'qmkg') {
+    showToast('全民 K 歌伴奏不支持切换为歌曲音源');
+    return;
+  }
   var previousSong = cloneSong(song);
   if (provider === currentProvider) {
     closeControlSourceSwitcher();
@@ -715,6 +796,7 @@ function songVipTagHtml(song) {
 }
 function searchResultMetaText(song) {
   var bits = [];
+  if (songProviderKey(song) === 'qmkg') bits.push('纯伴奏');
   if (song.artist) bits.push(song.artist);
   if (song.album) bits.push(song.album);
   if (songProviderKey(song) === 'qq' && !song.playable) bits.push('QQ 播放需会话/授权');
@@ -725,6 +807,7 @@ function searchResultMetaText(song) {
 }
 function searchResultMetaHtml(song, index) {
   song = song || {};
+  if (songProviderKey(song) === 'qmkg') return escHtml(searchResultMetaText(song));
   var artist = String(song.artist || '').trim();
   var bits = [];
   if (song.album) bits.push(song.album);
@@ -747,6 +830,7 @@ function searchIntentPrefersQQ(q) {
 }
 var MUSIC_SEARCH_PROVIDER_ORDER = ['netease', 'qq', 'kugou', 'qishui'];
 function searchProviderStatus(provider) {
+  if (provider === 'qmkg') return qmkgLoginStatus;
   if (typeof platformStatus === 'function') return platformStatus(provider);
   if (provider === 'spotify') return spotifyLoginStatus;
   if (provider === 'qishui') return qishuiLoginStatus;
@@ -759,6 +843,7 @@ function searchProviderIsLoggedIn(provider) {
   return !!(st && st.loggedIn);
 }
 function searchProviderCanSearch(provider) {
+  if (provider === 'qmkg') return true;
   var st = searchProviderStatus(provider) || {};
   var capabilities = st.capabilities || {};
   if (st.searchReady === true || st.publicCatalog === true || capabilities.search === true) return true;
@@ -768,7 +853,7 @@ function searchProviderCanSearch(provider) {
   return provider === 'netease' || provider === 'qq' || provider === 'kugou' || provider === 'qishui';
 }
 function searchModeProvider(mode) {
-  return mode === 'netease' || mode === 'qq' || mode === 'kugou' || mode === 'qishui' ? mode : '';
+  return mode === 'netease' || mode === 'qq' || mode === 'kugou' || mode === 'qishui' || mode === 'qmkg' ? mode : '';
 }
 function activeSearchProvidersForMode(mode) {
   var specific = searchModeProvider(mode);
@@ -785,6 +870,7 @@ function searchProviderLoginNotice(mode) {
 }
 function searchProviderUrl(provider, q, limit, offset) {
   var suffix = '&limit=' + limit + '&offset=' + Math.max(0, Number(offset) || 0);
+  if (provider === 'qmkg') return '/api/qmkg/search?keywords=' + encodeURIComponent(q) + suffix;
   if (provider === 'qq') return '/api/qq/search?keywords=' + encodeURIComponent(q) + suffix;
   if (provider === 'kugou') return '/api/kugou/search?keywords=' + encodeURIComponent(q) + suffix;
   if (provider === 'qishui') return '/api/qishui/search?keywords=' + encodeURIComponent(q) + suffix;
@@ -969,6 +1055,7 @@ function searchPopularityScore(song, sourceIndex) {
   return score;
 }
 function searchCanonicalSongKey(song) {
+  if (song && (song.provider === 'qmkg' || song.source === 'qmkg' || song.type === 'qmkg')) return 'qmkg:' + String(song.ksongMid || song.id || '');
   var title = simpleSearchNorm(song && song.name);
   var artists = sourceSwitchArtistParts(song).slice(0, 3).sort();
   if (!title || !artists.length) return '';
@@ -1071,7 +1158,7 @@ async function fetchMusicSearchResults(q, mode, previousPages) {
   Object.keys(previousPages || {}).forEach(function (provider) {
     providerPages[provider] = Object.assign({}, previousPages[provider]);
   });
-  var pageLimitByProvider = { netease: 18, qq: 12, kugou: 12, qishui: 12, spotify: 10 };
+  var pageLimitByProvider = { netease: 18, qq: 12, kugou: 12, qishui: 12, spotify: 10, qmkg: 18 };
   var fetchProviders = providers.filter(function (provider) {
     return !previousPages || !previousPages[provider] || previousPages[provider].hasMore;
   });
@@ -1083,7 +1170,7 @@ async function fetchMusicSearchResults(q, mode, previousPages) {
       return { provider: provider, offset: offset, requestedLimit: limit, value: value || {} };
     });
   }));
-  var songsByProvider = { netease: [], qq: [], kugou: [], qishui: [], spotify: [] };
+  var songsByProvider = { netease: [], qq: [], kugou: [], qishui: [], spotify: [], qmkg: [] };
   fetchProviders.forEach(function (provider, index) {
     var entry = result[index];
     if (!entry || entry.status !== 'fulfilled') {
@@ -1112,7 +1199,9 @@ async function fetchMusicSearchResults(q, mode, previousPages) {
     songsByProvider[provider] = songs;
     if (value.message && !songs.length && !searchProviderNotice) searchProviderNotice = value.message;
   });
-  var songs = mergeSongSearchResults(
+  var songs = mode === 'qmkg' ? songsByProvider.qmkg.filter(function (song) {
+    return song && songProviderKey(song) === 'qmkg' && song.accompaniment === true;
+  }).slice(0, MUSIC_SEARCH_MAX_RESULTS) : mergeSongSearchResults(
     songsByProvider.netease,
     songsByProvider.qq,
     songsByProvider.kugou,

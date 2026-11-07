@@ -213,11 +213,14 @@ function syncAccountProviderOrderUi() {
       var node = document.getElementById('login-provider-' + provider);
       if (node && node.parentNode === parent) parent.appendChild(node);
     });
+    var accompanimentNode = document.getElementById('login-provider-qmkg');
+    if (accompanimentNode && accompanimentNode.parentNode === parent) parent.appendChild(accompanimentNode);
     animateAccountProviderReorder(parent, '[data-login-provider]', beforeRects, 'provider-reorder-moving');
     if (typeof scheduleLoginWorkflowEdges === 'function') scheduleLoginWorkflowEdges('provider-order-ui');
   }
 }
 function platformMeta(provider) {
+  if (provider === 'qmkg') return { key: 'qmkg', short: '伴奏', label: '全民 K 歌伴奏', app: 'Windows 全民 K 歌客户端', dot: 'qmkg' };
   if (provider === 'qq') return { key: 'qq', short: 'QQ', label: 'QQ 音乐', app: 'QQ 音乐 App', dot: 'qq' };
   if (provider === 'kugou') return { key: 'kugou', short: 'KG', label: '酷狗音乐', app: '酷狗音乐 App', dot: 'kugou' };
   if (provider === 'qishui') return { key: 'qishui', short: 'QS', label: '汽水音乐', app: '汽水音乐 App', dot: 'qishui' };
@@ -225,6 +228,7 @@ function platformMeta(provider) {
   return { key: 'netease', short: 'NE', label: '网易云音乐', app: '网易云音乐 App', dot: 'netease' };
 }
 function platformStatus(provider) {
+  if (provider === 'qmkg') return qmkgLoginStatus;
   if (provider === 'spotify') return spotifyLoginStatus;
   if (provider === 'qishui') return qishuiLoginStatus;
   if (provider === 'kugou') return kugouLoginStatus;

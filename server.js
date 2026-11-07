@@ -112,6 +112,7 @@ const {
 } = require('./qishui-api');
 const qishuiQrLogin = require('./qishui-qr-login');
 const { clearSpotifyToken } = require('./spotify-api');
+const { createQmkgClient } = require('./qmkg-api');
 const {
   appendCuefieldFeedback,
   readCuefieldFeedbackStats,
@@ -120,6 +121,9 @@ const { planCuefieldTransitionFromCache } = require('./cuefield/mineradio-bridge
 
 const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
+const qmkgClient = createQmkgClient({
+  configFile: process.env.QMKG_CONFIG_FILE || path.join(__dirname, '.qmkg-settings.json'),
+});
 const LOGIN_EASTER_EGG_GATE_FILE = String(process.env.MINERADIO_LOGIN_EASTER_EGG_GATE_FILE || '');
 const LOGIN_EASTER_EGG_GATE_VERSION = String(process.env.MINERADIO_LOGIN_EASTER_EGG_GATE_VERSION || 'world-peace-v1');
 const LOGIN_EASTER_EGG_PROTECTED_ROUTES = new Set([
@@ -409,15 +413,18 @@ function serveStatic(res, filePath) {
     res.end(data);
   });
 }
-function sendJSON(res, data, status) {
+function sendJSON(res, data, status, localOnly = false) {
   res.writeHead(status || 200, {
     'Content-Type': 'application/json; charset=utf-8',
-    'Access-Control-Allow-Origin': '*',
+    ...(localOnly ? { 'Vary': 'Origin' } : { 'Access-Control-Allow-Origin': '*' }),
     'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
     'Pragma': 'no-cache',
     'Expires': '0',
   });
   res.end(JSON.stringify(data));
+}
+function sendLocalJSON(res, data, status) {
+  sendJSON(res, data, status, true);
 }
 function readPackageInfo() {
   try {
@@ -2828,6 +2835,7 @@ function audioProxyHeadersFor(audioUrl, range) {
   try {
     const host = new URL(audioUrl).hostname.toLowerCase();
     if (host.includes('qq.com') || host.includes('qpic.cn')) headers.Referer = 'https://y.qq.com/';
+    if (host === 'kg.qq.com' || host.endsWith('.kg.qq.com')) headers.Referer = 'https://kg.qq.com/';
     if (host.includes('qishui.com') || host.includes('byteimg.com') || host.includes('douyin')) headers.Referer = 'https://www.qishui.com/';
     const kugouReferer = kugouAudioReferer(audioUrl);
     if (kugouReferer) headers.Referer = kugouReferer;
@@ -4637,6 +4645,77 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost:' + PORT);
   const pn = url.pathname;
 
+  if (pn === '/api/qmkg' || pn.startsWith('/api/qmkg/')) {
+    // This adapter can read a user's desktop login session. Keep its surface local.
+    const remote = String(req.socket.remoteAddress || '');
+    let requestHost;
+    try { requestHost = new URL('http://' + req.headers.host); } catch (_) {}
+    const origin = String(req.headers.origin || '');
+    let sameOrigin = !origin;
+    try { sameOrigin = sameOrigin || new URL(origin).origin === requestHost.origin; } catch (_) {}
+    if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(remote)
+      || !requestHost || !['127.0.0.1', '[::1]', 'localhost'].includes(requestHost.hostname)
+      || !sameOrigin || req.headers['sec-fetch-site'] === 'cross-site') {
+      sendLocalJSON(res, { provider: 'qmkg', error: 'LOCAL_ACCESS_REQUIRED', message: '请在本机播放器中使用全民 K 歌连接。' }, 403);
+      return;
+    }
+    const mutations = ['/api/qmkg/config', '/api/qmkg/session/refresh'];
+    const expectedMethod = mutations.includes(pn) ? 'POST' : 'GET';
+    if (req.method !== expectedMethod) {
+      sendLocalJSON(res, { provider: 'qmkg', error: 'METHOD_NOT_ALLOWED' }, 405);
+      return;
+    }
+    if (expectedMethod === 'POST') {
+      if (!/^application\/json(?:\s*;|$)/i.test(String(req.headers['content-type'] || ''))) {
+        sendLocalJSON(res, { provider: 'qmkg', error: 'INVALID_REQUEST', message: '请从播放器内检测或配置连接。' }, 403);
+        return;
+      }
+    }
+    try {
+      if (pn === '/api/qmkg/status') {
+        sendLocalJSON(res, await qmkgClient.getStatus());
+      } else if (pn === '/api/qmkg/session/refresh') {
+        sendLocalJSON(res, await qmkgClient.getStatus({ refresh: true }));
+      } else if (pn === '/api/qmkg/config') {
+        const body = await readRequestBody(req);
+        if (typeof body.cacheDir !== 'string' || body.cacheDir.length > 1000) {
+          sendLocalJSON(res, { provider: 'qmkg', error: 'INVALID_CACHE_DIR', message: '请选择 Windows 客户端的 WeSingCache 文件夹。' }, 400);
+        } else {
+          sendLocalJSON(res, await qmkgClient.configure({ cacheDir: body.cacheDir }));
+        }
+      } else if (pn === '/api/qmkg/search') {
+        const keywords = String(url.searchParams.get('keywords') || '').trim().slice(0, 200);
+        const limit = Math.max(1, Math.min(50, parseInt(url.searchParams.get('limit'), 10) || 15));
+        const offset = Math.max(0, Math.min(10000, parseInt(url.searchParams.get('offset'), 10) || 0));
+        sendLocalJSON(res, await qmkgClient.search(keywords, { limit, offset }));
+      } else if (['/api/qmkg/song/url', '/api/qmkg/song/detail', '/api/qmkg/lyric'].includes(pn)) {
+        const id = String(url.searchParams.get('id') || '');
+        if (!/^[A-Za-z0-9]{1,128}$/.test(id)) {
+          sendLocalJSON(res, { provider: 'qmkg', error: 'INVALID_SONG_ID', message: '全民 K 歌歌曲标识无效。' }, 400);
+        } else if (pn === '/api/qmkg/song/url') {
+          sendLocalJSON(res, await qmkgClient.getSongUrl(id));
+        } else if (pn === '/api/qmkg/song/detail') {
+          sendLocalJSON(res, await qmkgClient.getSongInfo(id));
+        } else {
+          sendLocalJSON(res, await qmkgClient.getLyric(id));
+        }
+      } else {
+        sendLocalJSON(res, { provider: 'qmkg', error: 'NOT_FOUND' }, 404);
+      }
+    } catch (err) {
+      // Never serialize upstream response bodies, request URLs, or session values.
+      const code = /^QMKG_[A-Z_]+$/.test(String(err && err.code || '')) ? err.code : 'QMKG_REQUEST_FAILED';
+      const needsLogin = /SESSION|LOGIN|AUTH/.test(code);
+      sendLocalJSON(res, {
+        provider: 'qmkg', playable: false, error: code, reauthRequired: needsLogin,
+        message: needsLogin
+          ? '请在 Windows 全民 K 歌客户端登录后，回到这里重新检测。'
+          : '全民 K 歌暂时无法完成请求，请稍后重试或检查缓存目录。',
+      }, needsLogin ? 401 : (/INVALID_|CONFIG/.test(code) ? 400 : 502));
+    }
+    return;
+  }
+
   if (pn === '/api/spotify' || pn.indexOf('/api/spotify/') === 0) {
     sendJSON(res, { ok: false, error: 'PROVIDER_REMOVED', message: '该平台接口已从 Mineradio 移除。' }, 404);
     return;
@@ -4671,6 +4750,11 @@ const server = http.createServer(async (req, res) => {
 
   if (pn === '/api/platform/capabilities') {
     sendJSON(res, {
+      qmkg: {
+        search: true, accompaniment: true, lyrics: true, playlists: false,
+        likeRead: false, likeWrite: false, albumRead: false, albumCollect: false,
+        commentsRead: false, commentsWrite: false, listenReport: false,
+      },
       netease: {
         playlists: true, likeRead: true, likeWrite: true, albumRead: true,
         albumCollect: true, commentsRead: true, commentsWrite: true,

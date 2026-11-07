@@ -1855,12 +1855,14 @@ body.startup-fast-skip-revealing #bottom-bar {
 
 .search-mode-tabs {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 4px;
   width: max-content;
+  max-width: 100%;
   margin-top: 8px;
   padding: 3px;
-  border-radius: 999px;
+  border-radius: 16px;
   background: rgba(255, 255, 255, .045);
   border: 1px solid rgba(var(--fc-accent-rgb), .12);
   backdrop-filter: blur(18px);
@@ -1895,6 +1897,53 @@ body.startup-fast-skip-revealing #bottom-bar {
 body.empty-home-active.diy-mode #search-area:not(.has-results) #search-mode-tabs {
   display: none
 }
+
+.qmkg-connection {
+  box-sizing: border-box;
+  width: 100%;
+  margin-top: 8px;
+  padding: 12px;
+  border: 1px solid rgba(255, 173, 94, .2);
+  border-radius: 14px;
+  color: rgba(255, 255, 255, .75);
+  background: rgba(16, 16, 23, .9);
+  font-size: 11px;
+  line-height: 1.65;
+}
+
+.qmkg-connection[hidden] { display: none; }
+.qmkg-connection-head, .qmkg-cache-config { display: flex; align-items: center; gap: 8px; }
+.qmkg-connection-head { justify-content: space-between; }
+#qmkg-connection-status { color: #ffbd83; }
+.qmkg-connection.connected #qmkg-connection-status { color: #88dfb8; }
+.qmkg-connection p { margin: 6px 0; overflow-wrap: anywhere; }
+.qmkg-connection summary { cursor: pointer; color: rgba(255, 255, 255, .6); }
+.qmkg-connection label { display: block; margin: 8px 0 4px; }
+.qmkg-connection button {
+  flex-shrink: 0;
+  padding: 5px 9px;
+  border: 1px solid rgba(255, 255, 255, .18);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, .06);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.qmkg-connection button:disabled { opacity: .45; cursor: wait; }
+.qmkg-connection input {
+  box-sizing: border-box;
+  flex: 1;
+  min-width: 0;
+  padding: 7px;
+  border: 1px solid rgba(255, 255, 255, .18);
+  border-radius: 7px;
+  background: rgba(0, 0, 0, .2);
+  color: #fff;
+  font: inherit;
+}
+.qmkg-connection :focus-visible { outline: 2px solid #ffbd83; outline-offset: 2px; }
+.tag-source.qmkg { color: #ffbd83; background: rgba(255, 173, 94, .12); }
+.search-result.qmkg-source:hover { background: rgba(255, 173, 94, .06); }
 
 #search-results {
   margin-top: 8px;
@@ -2228,6 +2277,15 @@ body.simple-mode #fx-fab,
 body.simple-mode #fx-fab-hide-btn,
 body.simple-mode #fx-panel {
   display: none !important
+}
+
+html.simple-mode-preload #search-area.peek #search-mode-tabs,
+html.simple-mode-preload #search-area.has-results #search-mode-tabs,
+html.simple-mode-preload #search-area:focus-within #search-mode-tabs,
+body.simple-mode #search-area.peek #search-mode-tabs,
+body.simple-mode #search-area.has-results #search-mode-tabs,
+body.simple-mode #search-area:focus-within #search-mode-tabs {
+  display: flex !important
 }
 
 html.simple-mode-preload #search-area,
@@ -9011,6 +9069,35 @@ body.login-guide-active #login-guide-canvas {
 .login-auth-drawer .qq-cookie-panel.show {
   width: 100%;
   margin: 0
+}
+
+.login-node-providers.login-platform-tabs button.qmkg {
+  grid-template-columns: 18px 35px minmax(0, 1fr) auto 56px;
+}
+.login-node-providers.login-platform-tabs button.qmkg .provider-logo {
+  grid-column: 2;
+}
+.login-node-providers.login-platform-tabs button.qmkg .login-provider-state-badge {
+  color: #ffbd83;
+  background: rgba(255, 173, 94, .12);
+}
+.login-mode-node[hidden], .login-qmkg-panel[hidden] { display: none; }
+.login-auth-drawer.qmkg-mode { grid-template-columns: minmax(0, 1fr); }
+.login-auth-drawer.qmkg-mode > .login-auth-body,
+.login-auth-drawer.qmkg-mode > .login-auth-actions { display: none; }
+.login-qmkg-panel { min-width: 0; font-size: 11px; color: rgba(255, 255, 255, .65); }
+.login-qmkg-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.login-qmkg-panel summary { cursor: pointer; }
+.login-qmkg-panel label { display: block; margin: 10px 0 5px; }
+.login-qmkg-panel input {
+  min-width: 0;
+  flex: 1;
+  padding: 8px;
+  border: 1px solid rgba(255, 255, 255, .18);
+  border-radius: 8px;
+  color: inherit;
+  background: rgba(0, 0, 0, .2);
+  font: inherit;
 }
 
 .login-auth-actions {

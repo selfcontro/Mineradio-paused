@@ -2,6 +2,7 @@ var firstPlayDone = false;
 
 function playbackProviderLabel(song) {
   var provider = songProviderKey(song);
+  if (provider === 'qmkg') return '全民 K 歌伴奏';
   if (provider === 'qq') return 'QQ 音乐';
   if (provider === 'kugou') return '酷狗音乐';
   if (provider === 'qishui') return '汽水音乐';
@@ -87,6 +88,17 @@ function playbackProviderMembershipText(provider, data) {
 }
 function playbackRestrictionNotice(song, data) {
   data = data || {};
+  if (songProviderKey(song) === 'qmkg') {
+    var qmkgCategory = playbackRestrictionRawCategory(song, data) || 'url_unavailable';
+    var needsConnection = /login_required|session|auth|credential/.test(qmkgCategory);
+    return {
+      category: qmkgCategory,
+      title: needsConnection ? '全民 K 歌连接未就绪' : '伴奏暂不可用',
+      body: (data.message || (data.restriction && data.restriction.message) || '未取得当前歌曲的纯伴奏。') + (needsConnection ? ' 请在 K歌伴奏搜索页点击重新检测。' : ' 已保留伴奏模式，可稍后重试。'),
+      action: needsConnection ? 'qmkg_connection' : 'retry',
+      toast: needsConnection ? '请重新检测全民 K 歌连接' : '伴奏暂不可用'
+    };
+  }
   var restriction = data.restriction || {};
   var category = playbackRestrictionCategory(song, data);
   var provider = playbackProviderLabel(song);
@@ -468,6 +480,7 @@ function sourceFallbackProviderReady(provider) {
   return true;
 }
 function alternatePlaybackProviders(song) {
+  if (songProviderKey(song) === 'qmkg') return [];
   var currentProvider = normalizePlaybackProvider(songProviderKey(song));
   var ordered = typeof accountProviderOrder === 'function'
     ? accountProviderOrder()
@@ -486,6 +499,7 @@ function alternatePlaybackProvider(song) {
   return alternatePlaybackProviders(song)[0] || '';
 }
 async function searchAlternatePlatformSong(song, requestedTarget, recovery) {
+  if (songProviderKey(song) === 'qmkg' || requestedTarget === 'qmkg') return null;
   var target = requestedTarget || alternatePlaybackProvider(song);
   if (!target || !sourceFallbackProviderReady(target)) return null;
   if (recovery && !sourceFallbackRecoveryCanContinue(recovery)) return null;
@@ -646,6 +660,7 @@ async function skipFailedQueueItem(idx, token, message, opts) {
   return nextStarted === true;
 }
 async function tryAutoPlaybackFallback(song, data, idx, token, opts) {
+  if (songProviderKey(song) === 'qmkg') return null;
   opts = opts || {};
   if (opts.fallbackDepth > 0) {
     if (opts.fallbackOriginalSong && opts.fallbackCandidateSong) {
@@ -752,6 +767,10 @@ function handlePlaybackUnavailable(song, data) {
   var category = notice.category;
   showToast(notice.toast || notice.title || playbackRestrictionMessage(song, data));
   showSourceFallbackNotice(notice.title, notice.body);
+  if (provider === 'qmkg') {
+    loadQmkgConnectionStatus();
+    return;
+  }
   if (category === 'login_required') {
     setTimeout(function () {
       var modal = document.getElementById('login-modal');

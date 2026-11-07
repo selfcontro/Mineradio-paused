@@ -51,6 +51,28 @@ test('built-in playlists persist mixed-provider songs without changing their sou
   assert.equal(restored.listSync().count, 0);
 });
 
+test('accompaniment playlists retain their identity and never persist session or media URLs', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mineradio-qmkg-playlist-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const library = new BuiltInPlaylistLibrary({ userDataPath: root });
+  const id = (await library.create('伴奏')).playlist.id;
+  await library.addTrack(id, {
+    provider: 'qmkg', ksongMid: '000ExampleSong', name: '伴奏曲', artist: '测试歌手',
+    accompaniment: true, playbackMode: 'accompaniment',
+    url: 'https://example.com/private?vkey=do-not-save', cookie: 'openkey=do-not-save',
+  });
+  const restored = new BuiltInPlaylistLibrary({ userDataPath: root });
+  const track = restored.page(id).tracks[0];
+  assert.equal(track.provider, 'qmkg');
+  assert.equal(track.id, '000ExampleSong');
+  assert.equal(track.ksongMid, '000ExampleSong');
+  assert.equal(track.builtInIdentity, 'qmkg:000ExampleSong');
+  assert.equal(track.playbackMode, 'accompaniment');
+  assert.equal(track.accompaniment, true);
+  const persisted = fs.readFileSync(path.join(root, 'built-in-playlists.json'), 'utf8');
+  assert.doesNotMatch(persisted, /do-not-save|vkey|openkey/);
+});
+
 test('Electron and renderer wiring exposes built-in playlists in collection, panel, queue and shelf', () => {
   const appRoot = path.join(__dirname, '..');
   const main = fs.readFileSync(path.join(appRoot, 'desktop', 'main.js'), 'utf8');

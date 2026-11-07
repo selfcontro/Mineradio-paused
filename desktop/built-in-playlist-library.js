@@ -8,11 +8,12 @@ const MAX_PLAYLISTS = 100;
 const MAX_TRACKS_PER_PLAYLIST = 5000;
 const MAX_INDEX_BYTES = 32 * 1024 * 1024;
 const MAX_TRACK_BYTES = 48 * 1024;
-const ALLOWED_PROVIDERS = new Set(['netease', 'qq', 'kugou', 'qishui', 'local']);
+const ALLOWED_PROVIDERS = new Set(['netease', 'qq', 'kugou', 'qishui', 'qmkg', 'local']);
 
 const TRACK_FIELDS = [
   'provider', 'source', 'type', 'id', 'providerSongId', 'provider_song_id', 'trackId', 'track_id',
   'mid', 'songmid', 'mediaMid', 'media_mid', 'qqId',
+  'ksongMid', 'accompaniment',
   'hash', 'fileHash', 'audioHash', 'albumId', 'album_id', 'albumMid', 'albummid',
   'albumAudioId', 'album_audio_id', 'mixSongId', 'mix_song_id', 'hqHash', 'hq_hash',
   'sqHash', 'sq_hash', 'resHash', 'res_hash',
@@ -35,6 +36,7 @@ function normalizeProvider(song) {
   if (source === 'qq') return 'qq';
   if (source === 'kugou' || song && (song.hash || song.fileHash || song.audioHash)) return 'kugou';
   if (source === 'qishui') return 'qishui';
+  if (source === 'qmkg' || song && song.ksongMid) return 'qmkg';
   return 'netease';
 }
 
@@ -65,6 +67,7 @@ function trackIdentity(track) {
   else if (provider === 'qq') value = track.mid || track.songmid || track.id;
   else if (provider === 'kugou') value = track.hash || track.fileHash || track.audioHash || track.id;
   else if (provider === 'qishui') value = track.id || track.providerSongId || track.trackId || track.track_id;
+  else if (provider === 'qmkg') value = track.ksongMid || track.id;
   else value = track.id;
   value = cleanText(value, '', 512);
   return value ? `${provider}:${provider === 'kugou' ? value.toLowerCase() : value}` : '';
@@ -82,6 +85,12 @@ function sanitizeTrack(source) {
   });
   track.provider = provider;
   track.source = provider;
+  if (provider === 'qmkg') {
+    track.id = cleanText(track.ksongMid || track.id, '', 128);
+    track.ksongMid = track.id;
+    track.accompaniment = true;
+    track.playbackMode = 'accompaniment';
+  }
   if (!track.type) track.type = provider === 'local' ? 'local' : (provider === 'qq' ? 'qq' : 'song');
   track.name = cleanText(track.name || track.title, '未知歌曲', 1000);
   track.title = cleanText(track.title || track.name, track.name, 1000);

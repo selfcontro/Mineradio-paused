@@ -18,6 +18,11 @@ async function apiJson(url, opts) {
   }
 }
 function escHtml(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+function requireQmkgAccompanimentPlaybackData(data) {
+  if (!data || !data.url) return data;
+  if (typeof data.url === 'string' && data.provider === 'qmkg' && data.source === 'qmkg-accompaniment' && data.playbackMode === 'accompaniment' && data.accompaniment === true && data.level === 'standard' && data.quality === '伴奏' && !data.trial) return data;
+  return { provider: 'qmkg', url: null, playable: false, reason: 'accompaniment_required', message: '未取得已确认的纯伴奏，已停止播放，请稍后重试。' };
+}
 function normalizePlaybackQuality(value) {
   value = String(value || '').toLowerCase();
   if (value === 'jymaster' || value === 'master' || value === 'svip') return 'jymaster';
@@ -28,6 +33,7 @@ function normalizePlaybackQuality(value) {
   return 'hires';
 }
 function normalizePlaybackProvider(provider) {
+  if (provider === 'qmkg') return 'qmkg';
   if (provider === 'qq') return 'qq';
   if (provider === 'kugou') return 'kugou';
   if (provider === 'qishui') return 'qishui';
@@ -36,6 +42,7 @@ function normalizePlaybackProvider(provider) {
 }
 function normalizePlaybackQualityForProvider(value, provider) {
   provider = normalizePlaybackProvider(provider);
+  if (provider === 'qmkg') return 'standard';
   var q = normalizePlaybackQuality(value);
   if (provider === 'qq' && q === 'jymaster') return 'hires';
   return q;
@@ -66,6 +73,7 @@ function getPlaybackQualityForSong(song) {
 }
 function playbackQualityLabel(value, provider) {
   provider = normalizePlaybackProvider(provider || currentPlaybackQualityProvider());
+  if (provider === 'qmkg') return '伴奏';
   value = normalizePlaybackQualityForProvider(value, provider);
   if (provider === 'spotify') return 'Spotify 匹配源';
   if (provider === 'qishui') return '汽水音质';
@@ -92,6 +100,7 @@ function playbackQualityLabel(value, provider) {
 }
 function playbackQualityShortLabel(value, provider) {
   provider = normalizePlaybackProvider(provider || currentPlaybackQualityProvider());
+  if (provider === 'qmkg') return '伴奏';
   value = normalizePlaybackQualityForProvider(value, provider);
   if (provider === 'spotify') return 'SP';
   if (provider === 'qishui') return 'QS';
@@ -194,7 +203,8 @@ function readPlaybackQualityPreference() {
     qq: PLAYBACK_QUALITY_DEFAULTS.qq,
     kugou: PLAYBACK_QUALITY_DEFAULTS.kugou,
     qishui: PLAYBACK_QUALITY_DEFAULTS.qishui,
-    spotify: PLAYBACK_QUALITY_DEFAULTS.spotify
+    spotify: PLAYBACK_QUALITY_DEFAULTS.spotify,
+    qmkg: 'standard'
   };
   try {
     var raw = localStorage.getItem(PLAYBACK_QUALITY_STORE_KEY) || '';
@@ -206,7 +216,8 @@ function readPlaybackQualityPreference() {
         qq: normalizePlaybackQualityForProvider(legacy, 'qq'),
         kugou: normalizePlaybackQualityForProvider(legacy, 'kugou'),
         qishui: normalizePlaybackQualityForProvider(fallback.qishui, 'qishui'),
-        spotify: normalizePlaybackQualityForProvider(fallback.spotify, 'spotify')
+        spotify: normalizePlaybackQualityForProvider(fallback.spotify, 'spotify'),
+        qmkg: 'standard'
       };
     }
     var parsed = JSON.parse(raw);
@@ -216,7 +227,8 @@ function readPlaybackQualityPreference() {
       qq: normalizePlaybackQualityForProvider(parsed.qq || fallback.qq, 'qq'),
       kugou: normalizePlaybackQualityForProvider(parsed.kugou || fallback.kugou || 'lossless', 'kugou'),
       qishui: normalizePlaybackQualityForProvider(parsed.qishui || fallback.qishui || 'standard', 'qishui'),
-      spotify: normalizePlaybackQualityForProvider(parsed.spotify || fallback.spotify || 'standard', 'spotify')
+      spotify: normalizePlaybackQualityForProvider(parsed.spotify || fallback.spotify || 'standard', 'spotify'),
+      qmkg: 'standard'
     };
   } catch (e) {
     return fallback;
@@ -241,6 +253,7 @@ function updatePlaybackQualityUi() {
   var qualityProviderTitle = provider === 'spotify' ? 'Spotify 匹配源: ' : (provider === 'qishui' ? '汽水音质: ' : (provider === 'qq' ? 'QQ 音质: ' : (provider === 'kugou' ? '酷狗音质: ' : '网易云音质: ')));
   if (btn) btn.title = qualityProviderTitle + playbackQualityLabel(displayQuality, provider) +
     (provider === 'netease' && currentQuality === 'jymaster' && !canUseSvip ? ' · 超清母带需网易云 SVIP' : '');
+  if (btn && provider === 'qmkg') btn.title = '全民 K 歌纯伴奏';
   if (btn && runtimeCapQuality) btn.title += ' | 当前歌曲最高: ' + playbackQualityLabel(runtimeCapQuality, provider);
   if (list) {
     list.innerHTML = playbackQualityOptions(provider).map(function (item) {
