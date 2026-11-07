@@ -543,26 +543,39 @@ function createQmkgClient(options = {}) {
     if (!query || query.length > 200 || /[\x00-\x1f]/.test(query)) throw failure('QMKG_SEARCH_INVALID');
     limit = Math.max(1, Math.min(50, Math.floor(Number(limit) || 20)));
     offset = Math.max(0, Math.min(1000000, Math.floor(Number(offset) || 0)));
-    const page = Math.floor(offset / limit) + 1;
+    // The service can filter records after pagination (for example by region).
+    // Tiny upstream pages may be empty despite a nonzero total. Keep a stable
+    // upstream window and return a cursor that skips filtered slots, not merely
+    // offset + the number of surviving records.
+    const pageSize = 50;
+    const page = Math.floor(offset / pageSize) + 1;
     searchId = String(searchId || crypto.randomUUID()).slice(0, 128);
     const fetchPage = curpage => proxy({
       ns: 'search', cmd: 'search.search',
-      data: { s_key: query, curpage, numperpage: limit, searchid: searchId, amend: 0 },
+      data: { s_key: query, curpage, numperpage: pageSize, searchid: searchId, amend: 0 },
       mapExt: { cmdName: 'Search', dcapi: { interfaceId: 114000434 } },
     });
-    const result = await fetchPage(page);
-    const total = Math.max(0, Number(result.totalnum) || 0);
-    const skipped = offset % limit;
-    let rows = Array.isArray(result.v_song) ? result.v_song : [];
-    if (skipped && rows.length > skipped && (!total || page * limit < total)) {
-      const following = await fetchPage(page + 1);
-      rows = rows.concat(Array.isArray(following.v_song) ? following.v_song : []);
+    const songs = [];
+    let total = 0, nextOffset = offset, exhausted = false;
+    let currentPage = page, rowIndex = offset % pageSize;
+    // Bound sparse-page traversal so an unavailable catalogue cannot loop forever.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const result = await fetchPage(currentPage);
+      total = Math.max(total, Number(result.totalnum) || 0);
+      if (result.searchid) searchId = String(result.searchid).slice(0, 128);
+      const rows = Array.isArray(result.v_song) ? result.v_song : [];
+      while (rowIndex < rows.length && songs.length < limit) {
+        const song = normalizeSong(rows[rowIndex++]);
+        if (song.id) songs.push(song);
+      }
+      nextOffset = rowIndex >= rows.length ? currentPage * pageSize : (currentPage - 1) * pageSize + rowIndex;
+      exhausted = total > 0 ? nextOffset >= total : rows.length < pageSize;
+      if (songs.length >= limit || exhausted) break;
+      currentPage++;
+      rowIndex = 0;
     }
-    const songs = rows.slice(skipped, skipped + limit).map(song => normalizeSong(song)).filter(song => song.id);
-    const nextOffset = offset + songs.length;
     return { provider: 'qmkg', songs, total, offset, limit, page, nextOffset,
-      hasMore: songs.length > 0 && (total > 0 ? nextOffset < total : songs.length >= limit),
-      searchId: String(result.searchid || searchId) };
+      hasMore: !exhausted, searchId };
   }
 
   async function getSongInfo(value) {

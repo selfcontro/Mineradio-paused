@@ -1198,7 +1198,7 @@ async function fetchMusicSearchResults(q, mode, previousPages) {
     if (!isFinite(nextOffset) || nextOffset <= offset) nextOffset = offset + songs.length;
     var hasMore = value.hasMore === true;
     if (value.hasMore == null) hasMore = songs.length >= requestedLimit;
-    if (!songs.length || nextOffset <= offset) hasMore = false;
+    if ((!songs.length && provider !== 'qmkg') || nextOffset <= offset) hasMore = false;
     providerPages[provider] = {
       offset: offset,
       limit: Number(value.limit) || requestedLimit,

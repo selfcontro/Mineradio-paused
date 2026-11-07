@@ -47,6 +47,23 @@ test('accompaniment search stays separate, paginates anonymously and preserves d
   assert.match(calls[1], /&offset=1$/);
 });
 
+test('an empty filtered K-song page can advance to a later available page', async () => {
+  const calls = [];
+  const sandbox = load({
+    qmkgLoginStatus: { loggedIn: false }, MUSIC_SEARCH_MAX_RESULTS: 180,
+    async apiJson(url) {
+      calls.push(url);
+      return calls.length === 1 ? { songs: [], hasMore: true, nextOffset: 150, limit: 18 }
+        : { songs: [song()], hasMore: false, nextOffset: 200, limit: 18 };
+    }
+  }, { search: ['songProviderKey', 'searchProviderStatus', 'searchProviderCanSearch', 'searchModeProvider', 'activeSearchProvidersForMode', 'searchProviderUrl', 'searchProviderPagesHaveMore', 'fetchMusicSearchResults'] });
+  const first = await sandbox.fetchMusicSearchResults('sparse', 'qmkg');
+  assert.equal(first.hasMore, true);
+  const next = await sandbox.fetchMusicSearchResults('sparse', 'qmkg', first.providerPages);
+  assert.match(calls[1], /&offset=150$/);
+  assert.equal(next.songs.length, 1);
+});
+
 test('queue, cover and restore identities preserve accompaniment without persisting playback URLs', () => {
   const sandbox = load({}, { search: ['songProviderKey', 'songSourceTagHtml'], queue: ['queueItemKey', 'playbackRestoreSongSnapshot'], cover: ['songCustomCoverKey'] });
   const item = Object.assign(song(), { resolvedPlaybackProvider: 'netease', url: 'https://secret.invalid/signed', cookie: 'do-not-store' });
