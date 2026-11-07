@@ -6,6 +6,7 @@ const os = require('node:os');
 const assert = require('node:assert/strict');
 
 const reportDir = path.resolve('cloud-results');
+const interactiveLogin = process.env.QMKG_CLOUD_AUTH_TEST === '1';
 const report = { platform: process.platform, osRelease: os.release(), commit: process.env.GITHUB_SHA || '', checks: {}, authenticatedPlaybackTested: false };
 let app;
 let mainPage;
@@ -23,7 +24,7 @@ async function run() {
   phase = 'launch-installed-app';
   app = await electron.launch({
     executablePath: process.env.QMKG_INSTALLED_EXE,
-    args: ['--mute-audio', '--enable-unsafe-swiftshader', '--use-angle=swiftshader'],
+    args: ['--mute-audio', '--enable-unsafe-swiftshader', '--use-angle=swiftshader', '--autoplay-policy=no-user-gesture-required'],
     env: { ...process.env, MINERADIO_STARTUP_QA_HIDDEN: '1', MINERADIO_STARTUP_QA_USER_DATA: userData, MINERADIO_RUNTIME_NAME: 'MineradioCloud222-' + Date.now(), MINERADIO_STARTUP_QA_EXIT_MS: '0', MINERADIO_IGNORE_GPU_BLOCKLIST: '1', QMKG_CACHE_DIR: '' },
     timeout: 60000,
   });
@@ -81,16 +82,70 @@ async function run() {
     return { officialHost: location.hostname === 'kg.qq.com', hasQrPixels: high > low, mobileScanText: /全民K歌手机版扫描二维码/.test(document.querySelector('.j_login_wrap').innerText) };
   });
   for (const value of Object.values(qr)) assert.equal(value, true);
-  // Never publish a live QR challenge, Cookie, browser partition, or account data.
-  await login.close();
-  const cancelled = await loginResult;
-  assert.notEqual(cancelled && cancelled.ok, true);
   Object.assign(report.checks, qr);
+  if (interactiveLogin) {
+    phase = 'waiting-for-mobile-confirmation';
+    // Only the short-lived official challenge is transferred for the user's scan.
+    // Account Cookies, browser profiles and signed media URLs remain on this VM.
+    await fs.mkdir('cloud-qr', { recursive: true });
+    await login.locator('.j_login_img canvas').screenshot({ path: 'cloud-qr/official-login.png' });
+    await fs.writeFile('cloud-qr/ready.json', JSON.stringify({ createdAt: new Date().toISOString() }));
+    const auth = await loginResult;
+    report.login = { ok: auth && auth.ok === true, source: auth && auth.source, authValidated: auth && auth.authValidated === true, error: auth && auth.error };
+    assert.equal(report.login.ok, true, 'Official scan did not complete');
+    assert.equal(report.login.source, 'web');
+    assert.equal(report.login.authValidated, true);
+    phase = 'authenticated-accompaniment-and-lyrics';
+    const proof = await page.evaluate(async () => {
+      const search = await (await fetch('/api/qmkg/search?keywords=' + encodeURIComponent('晴天') + '&limit=5')).json();
+      let selected;
+      for (const song of search.songs || []) {
+        const media = await (await fetch('/api/qmkg/song/url?id=' + encodeURIComponent(song.id))).json();
+        const lyric = await (await fetch('/api/qmkg/lyric?id=' + encodeURIComponent(song.id))).json();
+        if (!media.playable || !media.url || !/\[\d+:\d+/.test(lyric.lyric || '')) continue;
+        const response = await fetch('/api/audio?url=' + encodeURIComponent(media.url), { headers: { Range: 'bytes=0-1023' } });
+        const bytes = new Uint8Array(await response.arrayBuffer());
+        selected = { song, accompaniment: media.accompaniment === true && media.playbackMode === 'accompaniment',
+          range206: response.status === 206, mp4: String.fromCharCode(...bytes.slice(4, 8)) === 'ftyp' };
+        break;
+      }
+      if (!selected) return { playable: false };
+      closeLoginModal();
+      fx.particleLyrics = true;
+      playQueue = [selected.song]; currentIdx = -1;
+      await playQueueAt(0);
+      return { playable: true, accompaniment: selected.accompaniment, range206: selected.range206, mp4: selected.mp4 };
+    });
+    for (const key of ['playable', 'accompaniment', 'range206', 'mp4']) assert.equal(proof[key], true, key);
+    await page.waitForFunction(() => audio && !audio.paused && !audio.error && audio.readyState >= 3 && audio.currentTime > 0.5 && lyricsLines.length >= 4, null, { timeout: 45000 });
+    const startTime = await page.evaluate(() => audio.currentTime);
+    await page.waitForTimeout(2500);
+    proof.clockAdvances = await page.evaluate(start => audio.currentTime > start + 1 && !audio.paused && !audio.error, startTime);
+    assert.equal(proof.clockAdvances, true);
+    const targets = await page.evaluate(() => lyricsLines.map((line, index) => ({ index, seconds: line.t - getAdjustedLyricPlaybackTime(0) + 0.3 }))
+      .filter(line => line.index > 0 && line.seconds > 1 && line.seconds < audio.duration - 2).slice(0, 3));
+    assert.ok(targets.length >= 2);
+    const indices = [];
+    for (const target of [targets[0], targets[2] || targets[1]]) {
+      await page.evaluate(seconds => { audio.currentTime = seconds; }, target.seconds);
+      await page.waitForFunction(index => stageLyrics.currentIdx === index && !!stageLyrics.current && audio && !audio.paused, target.index, { timeout: 20000 });
+      indices.push(await page.evaluate(() => stageLyrics.currentIdx));
+    }
+    proof.lyricFollowsSeek = indices[0] !== indices[1];
+    assert.equal(proof.lyricFollowsSeek, true);
+    Object.assign(report.checks, proof);
+    report.authenticatedPlaybackTested = true;
+    report.limit = 'Authenticated cloud playback verifies media decoding/playback clock and lyric rendering; no microphone recording or physical speaker listening test.';
+  } else {
+    await login.close();
+    const cancelled = await loginResult;
+    assert.notEqual(cancelled && cancelled.ok, true);
+    report.limit = 'Anonymous cloud verification only; authenticated cloud playback needs a separate phone confirmation and was not tested.';
+  }
   report.checks.rendererWithoutErrors = errors.length === 0;
   report.functionalIntegrationPassed = apiPassed;
   report.passed = uiReady && apiPassed && errors.length === 0;
   if (!report.passed) { report.failedPhase = !apiPassed ? 'anonymous-search-and-no-login-playback' : 'main-ui-graphics'; process.exitCode = 1; }
-  report.limit = 'Anonymous cloud verification only; authenticated cloud playback needs a separate phone confirmation and was not tested.';
 }
 
 run().catch(error => {
@@ -109,8 +164,13 @@ run().catch(error => {
       report.startup = { phase: state.phase, navigationReadyPhase: state.navigationReadyPhase || '', lastNavigationError: String(state.lastNavigationError || '').replace(/https?:\/\/\S+/g, '[url]').slice(0, 300) };
     } catch (_) {}
   }
-  if (app) await app.close().catch(() => {});
+  if (app) {
+    const closingApp = app;
+    const killTimer = setTimeout(() => { try { closingApp.process().kill(); } catch (_) {} }, 10000);
+    try { await closingApp.close().catch(() => {}); } finally { clearTimeout(killTimer); }
+  }
   await fs.mkdir(reportDir, { recursive: true });
   await fs.writeFile(path.join(reportDir, 'cloud-report.json'), JSON.stringify(report, null, 2));
   console.log(JSON.stringify(report));
+  await fs.writeFile(path.join(reportDir, 'finished.json'), JSON.stringify({ exitCode: process.exitCode || 0 }));
 });
