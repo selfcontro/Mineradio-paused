@@ -155,19 +155,48 @@ async function run() {
       return { playable: true, accompaniment: selected.accompaniment, range206: selected.range206, mp4: selected.mp4 };
     }), 120000);
     for (const key of ['playable', 'accompaniment', 'range206', 'mp4']) assert.equal(proof[key], true, key);
+    Object.assign(report.checks, proof);
     await page.waitForFunction(() => audio && !audio.paused && !audio.error && audio.readyState >= 3 && audio.currentTime > 0.5 && lyricsLines.length >= 4, null, { timeout: 45000 });
     const startTime = await page.evaluate(() => audio.currentTime);
     await page.waitForTimeout(2500);
     proof.clockAdvances = await page.evaluate(start => audio.currentTime > start + 1 && !audio.paused && !audio.error, startTime);
     assert.equal(proof.clockAdvances, true);
-    const targets = await page.evaluate(() => lyricsLines.map((line, index) => ({ index, seconds: line.t - getAdjustedLyricPlaybackTime(0) + 0.3 }))
-      .filter(line => line.index > 0 && line.seconds > 1 && line.seconds < audio.duration - 2).slice(0, 3));
+    report.checks.clockAdvances = true;
+    report.authenticatedPlaybackTested = true;
+    phase = 'rendered-lyrics-follow-playback-and-seek';
+    const targets = await page.evaluate(() => {
+      const candidates = lyricsLines.map((line, index) => ({ index, seconds: line.t - getAdjustedLyricPlaybackTime(0) + 0.3 }))
+        .filter(line => line.seconds > 5 && line.seconds < audio.duration - 5
+          && (!lyricsLines[line.index + 1] || lyricsLines[line.index + 1].t - lyricsLines[line.index].t > 1.5));
+      return [candidates[0], candidates.find(line => candidates[0] && line.seconds > candidates[0].seconds + 20)].filter(Boolean);
+    });
+    report.lyricTargets = targets;
     assert.ok(targets.length >= 2);
+    report.lyricSamples = [];
     const indices = [];
-    for (const target of [targets[0], targets[2] || targets[1]]) {
-      await page.evaluate(seconds => { audio.currentTime = seconds; }, target.seconds);
-      await page.waitForFunction(index => stageLyrics.currentIdx === index && !!stageLyrics.current && audio && !audio.paused, target.index, { timeout: 20000 });
-      indices.push(await page.evaluate(() => stageLyrics.currentIdx));
+    for (const target of targets) {
+      // Exercise the same seek operation as the progress bar. The audio clock
+      // continues running, so compare rendering to the current timestamp rather
+      // than requiring a fixed target line to remain on screen indefinitely.
+      await page.evaluate(seconds => commitProgressSeek(seconds, true), target.seconds);
+      let matched = false;
+      for (let attempt = 0; attempt < 20; attempt++) {
+        await page.waitForTimeout(1000);
+        const sample = await page.evaluate(() => {
+          const time = audio.currentTime;
+          const lyricTime = getAdjustedLyricPlaybackTime(time);
+          let expected = -1;
+          lyricsLines.forEach((line, index) => { if (line.t <= lyricTime) expected = index; });
+          return { time, lyricTime, expected, rendered: stageLyrics.currentIdx,
+            hasMesh: !!stageLyrics.current, playing: !audio.paused && !audio.error,
+            particles: fx.particleLyrics, seeking: audio.seeking };
+        });
+        report.lyricSamples.push(sample);
+        if (sample.playing && sample.hasMesh && sample.expected >= 0 && sample.expected === sample.rendered && sample.time >= target.seconds - 0.5) {
+          indices.push(sample.rendered); matched = true; break;
+        }
+      }
+      assert.equal(matched, true, 'Rendered lyrics did not follow the playback timestamp');
     }
     proof.lyricFollowsSeek = indices[0] !== indices[1];
     assert.equal(proof.lyricFollowsSeek, true);
