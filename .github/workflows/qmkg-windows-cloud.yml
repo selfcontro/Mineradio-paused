@@ -1,0 +1,49 @@
+name: QMKG clean Windows cloud test
+
+on:
+  push:
+    branches: [ci/qmkg-windows-cloud-test]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-clean:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      ELECTRON_BUILDER_CACHE: '${{ runner.temp }}\electron-builder-cache'
+      QMKG_INSTALLED_EXE: '${{ runner.temp }}\qmkg-install\Mineradio\Mineradio.exe'
+      PLAYWRIGHT_NODE_DIR: '${{ runner.temp }}\qmkg-test-tools\node_modules\playwright'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Install locked dependencies without restoring account or app caches
+        run: npm ci --no-audit --no-fund
+      - name: Run accompaniment and account regression tests
+        run: node --test "tests/qmkg-*.test.js" tests/built-in-playlist-library.test.js
+      - name: Build Windows 2.2.2 installer
+        run: npm run build:win -- --publish never --x64 --config.extraMetadata.version=2.2.2 --config.extraMetadata.mineradio.update.disabled=true --config.nsis.artifactName=Mineradio-2.2.2-QMKG-Setup.exe
+      - name: Install app into a disposable runner directory
+        shell: pwsh
+        run: ./tools/qmkg-cloud-install.ps1
+      - name: Install isolated browser test tooling
+        shell: pwsh
+        run: npm install --prefix "$env:RUNNER_TEMP/qmkg-test-tools" --no-save --package-lock=false playwright@1.62.1
+      - name: Test installed app, anonymous API, login isolation and official QR
+        run: node tools/qmkg-windows-cloud-smoke.cjs
+      - name: Upload sanitized cloud report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: qmkg-windows-cloud-report
+          path: cloud-results/
+          if-no-files-found: warn
+          retention-days: 7
